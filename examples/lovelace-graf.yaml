@@ -305,72 +305,103 @@ entities:
 # Atribut je jen na entitě výroby (`..._vyroba_export`), protože obsahuje obě
 # série. Na entitě sdílení není, aby se ta samá data nezdvojovala.
 
-type: custom:apexcharts-card
-graph_span: 1d
-span:
-  end: day
-  offset: -1d
-stacked: true
-header:
-  show: true
-  title: Předchozí den po 15 minutách
-  show_states: false
-apex_config:
-  chart:
-    height: 300
-  plotOptions:
-    bar:
-      columnWidth: 100%
-      borderRadius: 1
-  legend:
-    position: top
-    horizontalAlign: left
-  dataLabels:
-    enabled: false
-  stroke:
-    width: 0
-  tooltip:
-    shared: true
-    intersect: false
-    x:
-      format: HH:mm
-  xaxis:
-    labels:
-      format: HH:mm
-  yaxis:
-    decimalsInFloat: 2
-series:
-  - name: Sdíleno
-    entity: sensor.edc_859182400312427576_vyroba_export
-    type: column
-    color: "#1baf7a"
-    unit: " kWh"
-    float_precision: 3
-    data_generator: |
-      const d = entity.attributes.detail_15min;
-      if (!d || !d.casy) return [];
-      return d.casy.map((t, i) => {
-        const [h, m] = t.split(":").map(Number);
-        const ts = new Date(d.datum + "T00:00:00");
-        ts.setHours(h, m, 0, 0);
-        return [ts.getTime(), d.sdileno[i]];
-      });
-  - name: Nesdíleno
-    entity: sensor.edc_859182400312427576_vyroba_export
-    type: column
-    color: "#898781"
-    unit: " kWh"
-    float_precision: 3
-    data_generator: |
-      const d = entity.attributes.detail_15min;
-      if (!d || !d.casy) return [];
-      return d.casy.map((t, i) => {
-        const [h, m] = t.split(":").map(Number);
-        const ts = new Date(d.datum + "T00:00:00");
-        ts.setHours(h, m, 0, 0);
-        return [ts.getTime(), Math.max(0, d.vyroba[i] - d.sdileno[i])];
-      });
+type: vertical-stack
+cards:
+  # Součty za daný den. Apexcharts umí v hlavičce ukázat jen aktuální hodnotu
+  # série (s data_generator tedy poslední interval), ne součet — proto je nad
+  # grafem samostatná markdown karta. Počítá ze stejných polí, ze kterých
+  # kreslí graf, takže se čísla nemohou rozejít.
+  - type: markdown
+    content: |-
+      {% set e = 'sensor.edc_859182400312427576_vyroba_export' %}
+      {% set d = state_attr(e, 'detail_15min') %}
+      {% if d and d.casy %}
+      {% set vyroba = d.vyroba | sum %}
+      {% set sdileno = d.sdileno | sum %}
+      {% set nesdileno = vyroba - sdileno %}
+      {% set p = d.datum.split('-') %}
+      **Předchozí den — {{ p[2] | int }}. {{ p[1] | int }}. {{ p[0] }}**
 
+      Sdíleno **{{ '%.2f' | format(sdileno) | replace('.', ',') }} kWh**
+      ({{ '%.1f' | format(100 * sdileno / vyroba if vyroba > 0 else 0) | replace('.', ',') }} %)
+      · Nesdíleno **{{ '%.2f' | format(nesdileno) | replace('.', ',') }} kWh**
+      · Celkem **{{ '%.2f' | format(vyroba) | replace('.', ',') }} kWh**
+      {% else %}
+      Data předchozího dne ještě nejsou k dispozici — objeví se po prvním denním
+      stažení (výchozí čas 10:30).
+      {% endif %}
+
+  - type: custom:apexcharts-card
+    graph_span: 1d
+    span:
+      end: day
+      offset: -1d
+    stacked: true
+    header:
+      show: false
+    apex_config:
+      chart:
+        height: 300
+      plotOptions:
+        bar:
+          columnWidth: 100%
+          borderRadius: 1
+      legend:
+        position: top
+        horizontalAlign: left
+      dataLabels:
+        enabled: false
+      stroke:
+        width: 0
+      tooltip:
+        shared: true
+        intersect: false
+        x:
+          format: HH:mm
+      xaxis:
+        labels:
+          format: HH:mm
+      yaxis:
+        decimalsInFloat: 2
+    series:
+      - name: Sdíleno
+        entity: sensor.edc_859182400312427576_vyroba_export
+        type: column
+        color: "#1baf7a"
+        unit: " kWh"
+        float_precision: 3
+        data_generator: |
+          const d = entity.attributes.detail_15min;
+          if (!d || !d.casy) return [];
+          return d.casy.map((t, i) => {
+            const [h, m] = t.split(":").map(Number);
+            const ts = new Date(d.datum + "T00:00:00");
+            ts.setHours(h, m, 0, 0);
+            return [ts.getTime(), d.sdileno[i]];
+          });
+      - name: Nesdíleno
+        entity: sensor.edc_859182400312427576_vyroba_export
+        type: column
+        color: "#898781"
+        unit: " kWh"
+        float_precision: 3
+        data_generator: |
+          const d = entity.attributes.detail_15min;
+          if (!d || !d.casy) return [];
+          return d.casy.map((t, i) => {
+            const [h, m] = t.split(":").map(Number);
+            const ts = new Date(d.datum + "T00:00:00");
+            ts.setHours(h, m, 0, 0);
+            return [ts.getTime(), Math.max(0, d.vyroba[i] - d.sdileno[i])];
+          });
+
+# EAN je ve trojici míst: v markdownu a v obou sériích. Při kopírování nahraď
+# všechny tři.
+#
+# Datum se skládá ručně ze `d.datum.split('-')`, ne přes
+# `timestamp_custom('%-d. %-m. %Y')` — modifikátor `%-d` (číslo bez úvodní nuly)
+# není ve strftime standardní a na jiné platformě by se rozbil.
+#
 # `offset: -1d` posouvá okno grafu na včerejšek, což je den, který integrace
 # normálně reportuje. Kdyby ti portál data uzavíral s větším zpožděním, sloupce
 # by vypadly z okna a graf by byl prázdný — pak zvětši offset (`-2d`).
