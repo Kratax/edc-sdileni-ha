@@ -57,28 +57,38 @@ karta apod.).
    neposkytuje automatizovaný přístup fyzickým osobám — API se může kdykoliv
    změnit, přestat fungovat, nebo to může být v rozporu s podmínkami užívání
    portálu. Používáš na vlastní riziko a odpovědnost.
-2. **Přihlašování běží přes tzv. "password grant"** (OAuth2 Resource Owner
-   Password Credentials) přímo proti EDC Keycloak SSO. Spousta Keycloak
-   instalací tenhle typ přihlášení z bezpečnostních důvodů **vypíná**. Než
-   cokoliv nastavíš v Home Assistantu, **ověř si to sám** příkazem níže —
-   heslo posíláš jen ze svého vlastního počítače/terminálu, nikam jinam.
+2. **Přihlašovací jméno je e-mail**, kterým se hlásíš na portal.edc-cr.cz.
 3. Heslo bude uložené v konfiguraci Home Assistanta (`.storage/core.config_entries`)
    — chraň zálohy HA stejně jako jakékoliv jiné citlivé údaje.
+4. **Dvoufaktorové ověření (OTP) integrace neumí.** Pokud ho máš na účtu
+   zapnuté, přihlášení skončí chybou, která ti to řekne.
 
-### Ověřovací test (spusť sám, v terminálu — ne přes AI asistenta)
+## Jak funguje přihlašování
 
-```bash
-curl -s -X POST "https://sso.portal.edc-cr.cz/auth/realms/edc/protocol/openid-connect/token" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=password" \
-  -d "client_id=a63c22a3-6e1d-4eac-b383-d06373da046a" \
-  -d "username=TVOJE_PRIHLASOVACI_JMENO" \
-  -d "password=TVOJE_HESLO"
-```
+Portál EDC je OIDC klient (Keycloak) a jeho frontend se hlásí přes
+**authorization code + PKCE**. Integrace dělá totéž, jen bez prohlížeče:
 
-- JSON s `"access_token": "..."` → funguje, můžeš pokračovat.
-- Chyba `invalid_grant` / `unauthorized_client` / `unsupported_grant_type` →
-  EDC tuhle cestu přihlášení nepovoluje a integrace bez úprav nepůjde použít.
+1. Zavolá `/protocol/openid-connect/auth` s PKCE challenge a dostane
+   přihlašovací stránku Keycloaku.
+2. Odešle e-mail a heslo do formuláře `kc-form-login` (zvládne i realmy, které
+   se ptají nejdřív na jméno a pak na heslo).
+3. Z přesměrování si vezme `code` a vymění ho na token endpointu za tokeny.
+
+Při přihlášení si integrace říká o rozsah **`offline_access`**. Když ho EDC
+povolí, dostane *offline* refresh token, který nepřežívá jen SSO session, ale
+platí dlouhodobě — od té chvíle se heslo **už nepoužívá vůbec**, integrace jen
+obnovuje access token. Refresh token se ukládá do `.storage`, takže ani restart
+Home Assistanta nevyžaduje nové přihlášení.
+
+Jeden config entry = jedno přihlášení, které si sdílí všechny nastavené EANy.
+Když API odmítne token uprostřed stahování (typicky při dlouhém backfillu),
+integrace si ho jednou tiše obnoví a pokračuje.
+
+Pokud by browser flow nešel použít, integrace ještě zkusí klasický
+**password grant** (OAuth2 Resource Owner Password Credentials) — nejdřív
+s `offline_access`, pak bez něj. Chybu, kterou vrátí Keycloak, uvidíš
+v konfiguračním formuláři i v logu, takže je poznat rozdíl mezi špatným heslem,
+zablokovaným účtem a nedostupným SSO.
 
 ## Instalace
 
