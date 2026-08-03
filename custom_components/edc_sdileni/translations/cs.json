@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "EDC sdílení elektřiny",
-        "description": "Zadej přihlašovací údaje do portálu portal.edc-cr.cz a výrobní EAN, který chceš sledovat. Další EANy můžeš přidat později v Možnostech.",
+        "description": "Zadej přihlašovací údaje do portálu portal.edc-cr.cz a výrobní EAN, který chceš sledovat. Přihlašovací jméno je e-mail, kterým se hlásíš na portál. Další EANy můžeš přidat později v Možnostech.",
         "data": {
           "username": "Přihlašovací jméno",
           "password": "Heslo",
@@ -12,7 +12,7 @@
       },
       "reauth_confirm": {
         "title": "Obnovit přihlášení k EDC",
-        "description": "Přihlašovací údaje k portálu EDC už nefungují. Zadej je znovu.",
+        "description": "Přihlášení k portálu EDC už nefunguje. Zadej údaje znovu — přihlašovací jméno je e-mail, kterým se hlásíš na portal.edc-cr.cz.",
         "data": {
           "username": "Přihlašovací jméno",
           "password": "Heslo"
@@ -20,8 +20,8 @@
       }
     },
     "error": {
-      "invalid_auth": "Přihlášení bylo odmítnuto — zkontroluj jméno a heslo (nebo EDC nepovoluje tento typ přihlášení, viz README).",
-      "cannot_connect": "Portál EDC není momentálně dostupný, zkus to prosím znovu.",
+      "invalid_auth": "EDC odmítlo přihlášení. {error_detail}",
+      "cannot_connect": "Portál EDC není momentálně dostupný. {error_detail}",
       "ean_not_found": "Tento EAN nebyl na portálu nalezen — zkontroluj, že je zadaný správně a že je registrovaný ke sdílení.",
       "ean_already_added": "Tento EAN už je nastavený.",
       "required": "Toto pole je povinné.",

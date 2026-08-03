@@ -2,26 +2,26 @@
   "config": {
     "step": {
       "user": {
-        "title": "EDC sdílení elektřiny",
-        "description": "Zadej přihlašovací údaje do portálu portal.edc-cr.cz a výrobní EAN, který chceš sledovat. Další EANy můžeš přidat později v Možnostech.",
+        "title": "EDC electricity sharing",
+        "description": "Enter your portal.edc-cr.cz credentials and the production EAN you want to track. The username is the e-mail you sign in with. More EANs can be added later in Options.",
         "data": {
-          "username": "Přihlašovací jméno",
-          "password": "Heslo",
-          "ean": "Výrobní EAN"
+          "username": "Username (e-mail)",
+          "password": "Password",
+          "ean": "Production EAN"
         }
       },
       "reauth_confirm": {
-        "title": "Obnovit přihlášení k EDC",
-        "description": "Přihlašovací údaje k portálu EDC už nefungují. Zadej je znovu.",
+        "title": "Re-authenticate with EDC",
+        "description": "Your EDC portal credentials no longer work. Please enter them again.",
         "data": {
-          "username": "Přihlašovací jméno",
-          "password": "Heslo"
+          "username": "Username (e-mail)",
+          "password": "Password"
         }
       }
     },
     "error": {
-      "invalid_auth": "Přihlášení bylo odmítnuto — zkontroluj jméno a heslo (nebo EDC nepovoluje tento typ přihlášení, viz README).",
-      "cannot_connect": "Portál EDC není momentálně dostupný, zkus to prosím znovu.",
+      "invalid_auth": "EDC rejected the sign-in. {error_detail}",
+      "cannot_connect": "The EDC portal is unavailable. {error_detail}",
       "ean_not_found": "Tento EAN nebyl na portálu nalezen — zkontroluj, že je zadaný správně a že je registrovaný ke sdílení.",
       "ean_already_added": "Tento EAN už je nastavený.",
       "required": "Toto pole je povinné.",
