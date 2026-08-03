@@ -1,11 +1,11 @@
 {
   "domain": "edc_sdileni",
   "name": "EDC – sdílení elektřiny",
+  "codeowners": ["@Kratax"],
+  "config_flow": true,
   "documentation": "https://github.com/Kratax/edc-sdileni-ha",
+  "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/Kratax/edc-sdileni-ha/issues",
   "requirements": [],
-  "codeowners": ["@Kratax"],
-  "iot_class": "cloud_polling",
-  "config_flow": true,
   "version": "0.3.0"
 }
