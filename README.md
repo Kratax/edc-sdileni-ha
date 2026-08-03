@@ -186,6 +186,28 @@ tu samou elektřinu počítalo dvakrát — sdíleno je podmnožina exportu. Skl
 proto `sdíleno` + `nesdíleno` (= `measured - shared`), takže výška celého
 sloupce odpovídá celkovému exportu.
 
+### Detail dne po 15 minutách
+
+Entita výroby má navíc atribut **`detail_15min`** s celou 15minutovou křivkou
+posledního uzavřeného dne:
+
+```json
+{"datum": "2026-08-02",
+ "casy":    ["00:00", "00:15", "..."],
+ "vyroba":  [0.01, 0.01, "..."],
+ "sdileno": [0.0, 0.0, "..."]}
+```
+
+Portál tento detail vrací v téže odpovědi, ze které se počítají denní součty —
+integrace si ho jen odloží místo aby ho zahodila, takže to nestojí žádný
+požadavek navíc. Časy jsou z odpovědi, ne dopočítané jako `index * 15 min`:
+v den změny času má den 92 nebo 100 intervalů a dopočítané časy by se po
+přechodu rozešly o hodinu.
+
+Atribut je jen na entitě výroby, protože obsahuje obě série. Zabírá ~2 kB a
+mění se jednou denně, takže je to pro recorder zanedbatelné — vyřazovat ho
+z databáze není potřeba. Karta je v příkladech jako `6)`.
+
 ## Ladění
 
 Pokud senzory zůstávají `unavailable`/`unknown`, zkontroluj log
