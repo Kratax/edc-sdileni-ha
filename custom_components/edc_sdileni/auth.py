@@ -56,6 +56,7 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 from .const import (
     AUTH_URL,
     CLIENT_ID,
+    PORTAL_ORIGIN,
     LOGIN_TIMEOUT,
     REDIRECT_URI,
     SCOPE_BASIC,
@@ -99,6 +100,16 @@ class EdcAuthError(UpdateFailed):
 
     Retrying with the same credentials will not help, so callers should stop
     and ask the user for new ones instead of hammering the SSO.
+    """
+
+
+class EdcCredentialsRejected(EdcAuthError):
+    """Keycloak looked at the submitted e-mail/password and said no.
+
+    Distinct from EdcAuthError because it is *definitive*: there is no point
+    trying the same credentials again with a different scope or a different
+    grant type. Retrying only burns attempts against Keycloak's brute-force
+    detection, which is how a working account ends up temporarily locked.
     """
 
 
@@ -254,11 +265,20 @@ async def _async_token_request(session, data: dict, *, offline: bool) -> EdcToke
         async with session.post(
             TOKEN_URL,
             data=data,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                # The portal's SPA sends these; some backend security filters
+                # reject requests that don't look like they came from it.
+                "Origin": PORTAL_ORIGIN,
+                "Referer": REDIRECT_URI,
+            },
         ) as resp:
             text = await resp.text()
             if resp.status in (400, 401, 403):
-                raise EdcAuthError(_describe_token_error(resp.status, text))
+                message = _describe_token_error(resp.status, text)
+                if '"invalid_grant"' in text and "credential" in text.lower():
+                    raise EdcCredentialsRejected(message)
+                raise EdcAuthError(message)
             if resp.status != 200:
                 raise EdcApiError(f"SSO chyba HTTP {resp.status}: {text[:200]}")
             return _tokens_from_payload(json.loads(text), offline=offline)
@@ -341,7 +361,7 @@ async def _async_browser_login(session, username: str, password: str, scope: str
         # filled completely is a rejection - don't retry it.
         error = _extract_error(page)
         if error and "password" in asked_for:
-            raise EdcAuthError(f"EDC odmítlo přihlášení: {error}")
+            raise EdcCredentialsRejected(f"EDC odmítlo přihlášení: {error}")
     else:
         raise EdcAuthError(
             "Přihlášení do EDC se nepodařilo dokončit — SSO stále vrací další "
@@ -405,6 +425,10 @@ async def async_login(hass: HomeAssistant, username: str, password: str) -> EdcT
                     tokens = await _async_browser_login(session, username, password, scope)
                 else:
                     tokens = await _async_password_grant(session, username, password, scope)
+            except EdcCredentialsRejected:
+                # Wrong e-mail/password won't become right on the next attempt,
+                # and hammering Keycloak gets the account locked. Stop here.
+                raise
             except EdcAuthError as err:
                 last_auth_error = err
                 _LOGGER.debug(

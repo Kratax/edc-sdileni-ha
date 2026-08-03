@@ -37,6 +37,53 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+async def _validate_credentials_and_ean(
+    hass: HomeAssistant, username: str, password: str, ean: str | None
+) -> tuple[str | None, str]:
+    """Log in ONCE and, if an EAN is given, check it with the same token.
+
+    Doing the login twice (once to validate credentials, once to validate the
+    EAN) doubled the number of password submissions per form submit, and with
+    the login fallback chain on top of that a single click could fire eight
+    attempts at Keycloak - enough to trip its brute-force protection on a
+    perfectly good account.
+    """
+    try:
+        tokens = await async_login(hass, username, password)
+    except EdcAuthError as err:
+        _LOGGER.error("EDC sdílení: přihlášení odmítnuto při konfiguraci: %s", err)
+        return "invalid_auth", str(err)
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.error("EDC sdílení: portál nedostupný při konfiguraci: %s", err)
+        return "cannot_connect", str(err)
+
+    if ean is None:
+        return None, ""
+
+    session = async_get_clientsession(hass)
+    today = date.today()
+    try:
+        payload = await async_fetch_overview(
+            session, tokens.access_token, ean, today - timedelta(days=7), today
+        )
+    except EdcAuthError as err:
+        # Login worked, so this is the API refusing the *operation* - a
+        # different problem from bad credentials, and it must not be reported
+        # as one.
+        _LOGGER.error(
+            "EDC sdílení: přihlášení proběhlo, ale API odmítlo dotaz na EAN %s: %s", ean, err
+        )
+        return "api_forbidden", str(err)
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.error("EDC sdílení: nešlo ověřit EAN %s (%s)", ean, err)
+        return "cannot_connect", str(err)
+
+    if ean_is_missing(payload, ean):
+        _LOGGER.error("EDC sdílení: EAN %s nebyl na portálu nalezen", ean)
+        return "ean_not_found", ""
+    return None, ""
+
+
 async def _validate_login(
     hass: HomeAssistant, username: str, password: str
 ) -> tuple[str | None, str]:
@@ -46,39 +93,14 @@ async def _validate_login(
     no ("wrong password" vs "account needs an extra step" vs "SSO is down")
     instead of one generic sentence for every possible cause.
     """
-    try:
-        await async_login(hass, username, password)
-    except EdcAuthError as err:
-        _LOGGER.error("EDC sdílení: přihlášení odmítnuto při konfiguraci: %s", err)
-        return "invalid_auth", str(err)
-    except Exception as err:  # noqa: BLE001
-        _LOGGER.error("EDC sdílení: portál nedostupný při konfiguraci: %s", err)
-        return "cannot_connect", str(err)
-    return None, ""
+    return await _validate_credentials_and_ean(hass, username, password, None)
 
 
 async def _validate_ean(
     hass: HomeAssistant, username: str, password: str, ean: str
 ) -> tuple[str | None, str]:
     """Return (None, "") if the EAN is known to the portal, else an error code."""
-    session = async_get_clientsession(hass)
-    try:
-        tokens = await async_login(hass, username, password)
-        today = date.today()
-        payload = await async_fetch_overview(
-            session, tokens.access_token, ean, today - timedelta(days=7), today
-        )
-    except EdcAuthError as err:
-        _LOGGER.error("EDC sdílení: přihlášení odmítnuto při ověřování EAN %s: %s", ean, err)
-        return "invalid_auth", str(err)
-    except Exception as err:  # noqa: BLE001
-        _LOGGER.error("EDC sdílení: nešlo ověřit EAN %s (%s)", ean, err)
-        return "cannot_connect", str(err)
-
-    if ean_is_missing(payload, ean):
-        _LOGGER.error("EDC sdílení: EAN %s nebyl na portálu nalezen", ean)
-        return "ean_not_found", ""
-    return None, ""
+    return await _validate_credentials_and_ean(hass, username, password, ean)
 
 
 class EdcConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -105,15 +127,12 @@ class EdcConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors[CONF_EAN] = "required"
 
             if not errors:
-                error, detail = await _validate_login(self.hass, username, password)
+                error, detail = await _validate_credentials_and_ean(
+                    self.hass, username, password, ean
+                )
                 if error:
-                    errors["base"] = error
+                    errors["base" if error != "ean_not_found" else CONF_EAN] = error
                     error_detail = detail
-                else:
-                    error, detail = await _validate_ean(self.hass, username, password, ean)
-                    if error:
-                        errors[CONF_EAN] = error
-                        error_detail = detail
 
             if not errors:
                 await self.async_set_unique_id(f"{DOMAIN}_{username}")

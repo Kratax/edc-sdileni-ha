@@ -28,6 +28,7 @@ CLIENT_ID = "a63c22a3-6e1d-4eac-b383-d06373da046a"
 # with this exact redirect URI. Keycloak validates redirect_uri against the
 # client's registered list, so this value is not arbitrary.
 REDIRECT_URI = "https://portal.edc-cr.cz/"
+PORTAL_ORIGIN = "https://portal.edc-cr.cz"
 
 # `offline_access` asks Keycloak for an offline refresh token, which does not
 # die with the SSO session. That's what lets the integration keep working for
