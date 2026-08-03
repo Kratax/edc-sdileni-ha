@@ -30,6 +30,12 @@ CLIENT_ID = "a63c22a3-6e1d-4eac-b383-d06373da046a"
 REDIRECT_URI = "https://portal.edc-cr.cz/"
 PORTAL_ORIGIN = "https://portal.edc-cr.cz"
 
+# The portal's frontend sends this on every data call and the backend refuses
+# the operation without it (403 SECURITY_OPERATION_NOT_ALLOWED) even when the
+# access token is perfectly valid. It names the contract type whose data is
+# being requested and matches the `/standard/` segment in API_URL.
+EDC_CONTRACT_TYPE = "STANDARD"
+
 # `offline_access` asks Keycloak for an offline refresh token, which does not
 # die with the SSO session. That's what lets the integration keep working for
 # months without ever replaying the password. If the realm refuses the scope

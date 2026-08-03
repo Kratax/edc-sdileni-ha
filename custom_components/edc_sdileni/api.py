@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date
+import uuid
+from datetime import date, datetime, timezone
 
 import async_timeout
 
 from .auth import EdcApiError, EdcAuthError
-from .const import API_TIMEOUT, API_URL
+from .const import API_TIMEOUT, API_URL, EDC_CONTRACT_TYPE, PORTAL_ORIGIN, REDIRECT_URI
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,10 +41,24 @@ async def async_fetch_overview(
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
         "Content-Type": "application/json",
+        # Not optional: without it the backend answers 403
+        # SECURITY_OPERATION_NOT_ALLOWED even for a valid token, because it has
+        # no idea which contract type the request is about.
+        "Edc-Contract-Type": EDC_CONTRACT_TYPE,
+        # The portal tags every call with a fresh correlation id; mirroring that
+        # keeps our requests indistinguishable from its own and gives EDC
+        # something to grep for if they ever need to trace one.
+        "X-Correlation-ID": str(uuid.uuid4()),
+        "Origin": PORTAL_ORIGIN,
+        "Referer": REDIRECT_URI,
     }
+    # The portal sends the actual current UTC instant with milliseconds, not
+    # midnight. Matching it exactly removes one more way our request could look
+    # different from the frontend's.
+    now = datetime.now(timezone.utc)
     body = {
         "eans": [ean],
-        "currentEnteredDateTime": f"{date.today().isoformat()}T00:00:00.000Z",
+        "currentEnteredDateTime": now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z",
         "inputData": True,
         "outputData": True,
         "dateFrom": date_from.isoformat(),
