@@ -30,11 +30,17 @@ karta apod.).
 
 - **Denní aktualizace** v nastavený čas (výchozí 10:30) pro každý EAN
   zvlášť — v tu dobu už bývá předchozí den na portálu vyhodnocený.
-- **Backfill při startu HA:** pro každý EAN se zkontroluje, jestli má
-  aktuální kalendářní měsíc kompletní data. Pokud ne (nová instalace,
-  výpadek, restart po delší odstávce...), integrace sama dotáhne z portálu
-  vše chybějící zpětně až od "Začátku historie" (nastavíš v Možnostech,
-  typicky datum registrace EAN ke sdílení).
+- **Backfill při startu HA:** integrace si pamatuje, **odkud až už portál
+  dotazovala** (`attempted_from` v úložišti), a chybějící část rozsahu dotáhne
+  zpětně až od "Začátku historie" (nastavíš v Možnostech, typicky datum
+  registrace EAN ke sdílení). Když doplňování selže, značka se neposune, takže
+  se to při dalším startu zopakuje — do 1.2.1 se tohle poznávalo podle mezer
+  v aktuálním měsíci, které si ale denní dotaz zaplnil sám, takže po jednom
+  neúspěchu se backfill už nikdy nespustil.
+- **Dny, které portál uzavře pozdě**, se dohledávají v okně posledních 35 dní.
+  Dny starší než nejstarší den, ke kterému máme data, se znovu nedotazují —
+  na ty už se integrace ptala a portál pro ně nic nemá (typicky proto, že
+  tehdy sdílení ještě neběželo).
 - **Chybějící den na portálu se nevymýšlí:** pokud portál pro konkrétní den
   ještě nemá zpracovaná data, integrace pro něj nic neuloží a zkusí to znovu
   příště — nikdy neuloží nulu tam, kde ve skutečnosti "nevíme".
