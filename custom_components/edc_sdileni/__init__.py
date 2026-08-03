@@ -17,7 +17,8 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_change
 
-from .api import EdcAuthError, async_fetch_overview, async_get_access_token, ean_is_missing
+from .api import EdcAuthError, async_fetch_overview, ean_is_missing
+from .auth import EdcTokenManager
 from .const import (
     CONF_BACKFILL_DAYS,
     CONF_EANS,
@@ -53,13 +54,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     session = async_get_clientsession(hass)
 
-    # 1) Validate credentials once up front so a bad password fails fast with
-    #    a clear reauth prompt instead of silently retrying forever.
+    # 1) One token manager per config entry, shared by all EANs. It reuses a
+    #    refresh token cached from a previous run when there is one, so a
+    #    restart normally doesn't replay the password at all.
+    token_manager = EdcTokenManager(hass, username, password, entry.entry_id)
+    await token_manager.async_load()
+
+    # Get a token up front so bad credentials fail fast with a clear reauth
+    # prompt instead of silently retrying forever.
     try:
-        token = await async_get_access_token(session, username, password)
+        token = await token_manager.async_get_access_token()
     except EdcAuthError as err:
-        _LOGGER.error("EDC sdílení: neplatné přihlašovací údaje (%s)", err)
-        raise ConfigEntryAuthFailed("Neplatné přihlašovací jméno nebo heslo") from err
+        _LOGGER.error("EDC sdílení: přihlášení odmítnuto (%s)", err)
+        raise ConfigEntryAuthFailed(str(err)) from err
     except Exception as err:  # noqa: BLE001
         _LOGGER.warning("EDC sdílení: portál nedostupný při startu (%s)", err)
         raise ConfigEntryNotReady(f"EDC portál nedostupný: {err}") from err
@@ -148,8 +155,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     for ean in valid_eans:
         coordinator = EdcCoordinator(
             hass,
-            username,
-            password,
+            token_manager,
             ean,
             history_start,
             on_ean_not_found=_on_ean_not_found,
@@ -174,6 +180,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coordinators[ean] = coordinator
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
+        "token_manager": token_manager,
         "coordinators": coordinators,
         "invalid_eans": invalid_eans,
         "unsub_timers": unsub_timers,

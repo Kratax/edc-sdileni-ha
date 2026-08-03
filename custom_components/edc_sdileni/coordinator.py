@@ -11,7 +11,8 @@ from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .api import EdcAuthError, async_fetch_overview, async_get_access_token, ean_is_missing, parse_days
+from .api import EdcAuthError, async_fetch_overview, ean_is_missing, parse_days
+from .auth import EdcTokenManager
 from .const import (
     CHUNK_DAYS,
     RETRY_FIRST_DELAY,
@@ -42,16 +43,16 @@ class EdcCoordinator(DataUpdateCoordinator):
     def __init__(
         self,
         hass: HomeAssistant,
-        username: str,
-        password: str,
+        token_manager: EdcTokenManager,
         ean: str,
         history_start: date,
         on_ean_not_found: Callable[[str], Awaitable[None]] | None = None,
         on_auth_failure: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         super().__init__(hass, _LOGGER, name=f"EDC sdílení ({ean})", update_interval=None)
-        self._username = username
-        self._password = password
+        # Shared with every other EAN under the same config entry: one login,
+        # one access token, refreshed centrally.
+        self._tokens = token_manager
         self._ean = ean
         self._history_start = history_start
         self._store: Store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{ean}")
@@ -84,11 +85,27 @@ class EdcCoordinator(DataUpdateCoordinator):
             return {}
 
         session = async_get_clientsession(self.hass)
-        token = await async_get_access_token(session, self._username, self._password)
+        token = await self._tokens.async_get_access_token()
 
         new_days: dict[str, dict] = {}
         for chunk_from, chunk_to in _daterange_chunks(date_from, date_to, CHUNK_DAYS):
-            payload = await async_fetch_overview(session, token, self._ean, chunk_from, chunk_to)
+            try:
+                payload = await async_fetch_overview(
+                    session, token, self._ean, chunk_from, chunk_to
+                )
+            except EdcAuthError:
+                # The API refused our token mid-run. That usually means it just
+                # expired (long backfill) or was revoked server-side, not that
+                # the password is wrong - so throw the token away and retry the
+                # same chunk once with a brand new one.
+                _LOGGER.debug(
+                    "EDC sdílení (%s): API odmítlo token, obnovuji a zkouším znovu", self._ean
+                )
+                await self._tokens.async_invalidate()
+                token = await self._tokens.async_get_access_token()
+                payload = await async_fetch_overview(
+                    session, token, self._ean, chunk_from, chunk_to
+                )
 
             if ean_is_missing(payload, self._ean):
                 _LOGGER.error(

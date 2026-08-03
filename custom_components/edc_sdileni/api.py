@@ -1,4 +1,9 @@
-"""Thin client for EDC portal's internal (undocumented) JSON API."""
+"""Thin client for EDC portal's internal (undocumented) JSON API.
+
+Authentication lives in `auth.py` - this module only knows how to call the data
+endpoint with an already-valid access token and how to make sense of what comes
+back.
+"""
 from __future__ import annotations
 
 import json
@@ -6,53 +11,19 @@ import logging
 from datetime import date
 
 import async_timeout
-from homeassistant.helpers.update_coordinator import UpdateFailed
 
-from .const import API_URL, CLIENT_ID, TOKEN_URL
+from .auth import EdcApiError, EdcAuthError
+from .const import API_TIMEOUT, API_URL
 
 _LOGGER = logging.getLogger(__name__)
 
-
-class EdcAuthError(UpdateFailed):
-    """Username/password rejected by EDC SSO (wrong credentials, or the
-    'password' grant type disabled for this client)."""
-
-
-class EdcApiError(UpdateFailed):
-    """Any other failure talking to EDC (network, timeout, 5xx, ...)."""
-
-
-async def async_get_access_token(session, username: str, password: str) -> str:
-    """Log in via Keycloak's Resource Owner Password Credentials grant."""
-    data = {
-        "grant_type": "password",
-        "client_id": CLIENT_ID,
-        "username": username,
-        "password": password,
-        "scope": "openid",
-    }
-    try:
-        async with async_timeout.timeout(30):
-            async with session.post(TOKEN_URL, data=data) as resp:
-                text = await resp.text()
-                if resp.status in (400, 401, 403):
-                    _LOGGER.error(
-                        "EDC sdílení: přihlášení odmítnuto (HTTP %s): %s", resp.status, text[:300]
-                    )
-                    raise EdcAuthError(
-                        f"Přihlášení do EDC odmítnuto (HTTP {resp.status}): {text[:300]}"
-                    )
-                if resp.status != 200:
-                    raise EdcApiError(f"EDC SSO chyba (HTTP {resp.status}): {text[:300]}")
-                payload = json.loads(text)
-                token = payload.get("access_token")
-                if not token:
-                    raise EdcApiError(f"EDC token response bez access_token: {text[:300]}")
-                return token
-    except (EdcAuthError, EdcApiError):
-        raise
-    except Exception as err:  # noqa: BLE001 - network/timeout/etc
-        raise EdcApiError(f"EDC SSO nedostupné: {err}") from err
+__all__ = [
+    "EdcApiError",
+    "EdcAuthError",
+    "async_fetch_overview",
+    "ean_is_missing",
+    "parse_days",
+]
 
 
 async def async_fetch_overview(
@@ -80,13 +51,15 @@ async def async_fetch_overview(
         "fileName": "_",
     }
     try:
-        async with async_timeout.timeout(60):
+        async with async_timeout.timeout(API_TIMEOUT):
             async with session.post(API_URL, json=body, headers=headers) as resp:
                 text = await resp.text()
                 if resp.status in (401, 403):
-                    raise EdcAuthError(f"EDC API odmítlo token (HTTP {resp.status}): {text[:300]}")
+                    raise EdcAuthError(
+                        f"EDC API odmítlo token (HTTP {resp.status}): {text[:200]}"
+                    )
                 if resp.status != 200:
-                    raise EdcApiError(f"EDC API chyba (HTTP {resp.status}): {text[:300]}")
+                    raise EdcApiError(f"EDC API chyba (HTTP {resp.status}): {text[:200]}")
                 return json.loads(text)
     except (EdcAuthError, EdcApiError):
         raise

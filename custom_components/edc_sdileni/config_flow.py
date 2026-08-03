@@ -19,7 +19,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import EdcAuthError, async_fetch_overview, async_get_access_token, ean_is_missing
+from .api import EdcAuthError, async_fetch_overview, ean_is_missing
+from .auth import async_clear_stored_tokens, async_login
 from .const import (
     CONF_BACKFILL_DAYS,
     CONF_EAN,
@@ -36,40 +37,48 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
-async def _validate_login(hass: HomeAssistant, username: str, password: str) -> str | None:
-    """Return None on success, else an error code for the form."""
-    session = async_get_clientsession(hass)
+async def _validate_login(
+    hass: HomeAssistant, username: str, password: str
+) -> tuple[str | None, str]:
+    """Try to log in. Returns (error_code_or_None, human readable detail).
+
+    The detail is shown verbatim in the form so the user sees *why* EDC said
+    no ("wrong password" vs "account needs an extra step" vs "SSO is down")
+    instead of one generic sentence for every possible cause.
+    """
     try:
-        await async_get_access_token(session, username, password)
+        await async_login(hass, username, password)
     except EdcAuthError as err:
         _LOGGER.error("EDC sdílení: přihlášení odmítnuto při konfiguraci: %s", err)
-        return "invalid_auth"
+        return "invalid_auth", str(err)
     except Exception as err:  # noqa: BLE001
         _LOGGER.error("EDC sdílení: portál nedostupný při konfiguraci: %s", err)
-        return "cannot_connect"
-    return None
+        return "cannot_connect", str(err)
+    return None, ""
 
 
-async def _validate_ean(hass: HomeAssistant, username: str, password: str, ean: str) -> str | None:
-    """Return None if the EAN is known to the portal, else an error code."""
+async def _validate_ean(
+    hass: HomeAssistant, username: str, password: str, ean: str
+) -> tuple[str | None, str]:
+    """Return (None, "") if the EAN is known to the portal, else an error code."""
     session = async_get_clientsession(hass)
     try:
-        token = await async_get_access_token(session, username, password)
+        tokens = await async_login(hass, username, password)
         today = date.today()
         payload = await async_fetch_overview(
-            session, token, ean, today - timedelta(days=7), today
+            session, tokens.access_token, ean, today - timedelta(days=7), today
         )
     except EdcAuthError as err:
         _LOGGER.error("EDC sdílení: přihlášení odmítnuto při ověřování EAN %s: %s", ean, err)
-        return "invalid_auth"
+        return "invalid_auth", str(err)
     except Exception as err:  # noqa: BLE001
         _LOGGER.error("EDC sdílení: nešlo ověřit EAN %s (%s)", ean, err)
-        return "cannot_connect"
+        return "cannot_connect", str(err)
 
     if ean_is_missing(payload, ean):
         _LOGGER.error("EDC sdílení: EAN %s nebyl na portálu nalezen", ean)
-        return "ean_not_found"
-    return None
+        return "ean_not_found", ""
+    return None, ""
 
 
 class EdcConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -82,6 +91,7 @@ class EdcConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         errors: dict[str, str] = {}
+        error_detail = ""
         if user_input is not None:
             username = user_input[CONF_USERNAME].strip()
             password = user_input[CONF_PASSWORD]
@@ -95,13 +105,15 @@ class EdcConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors[CONF_EAN] = "required"
 
             if not errors:
-                error = await _validate_login(self.hass, username, password)
+                error, detail = await _validate_login(self.hass, username, password)
                 if error:
                     errors["base"] = error
+                    error_detail = detail
                 else:
-                    error = await _validate_ean(self.hass, username, password, ean)
+                    error, detail = await _validate_ean(self.hass, username, password, ean)
                     if error:
                         errors[CONF_EAN] = error
+                        error_detail = detail
 
             if not errors:
                 await self.async_set_unique_id(f"{DOMAIN}_{username}")
@@ -124,7 +136,12 @@ class EdcConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_EAN): str,
             }
         )
-        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+        return self.async_show_form(
+            step_id="user",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={"error_detail": error_detail},
+        )
 
     async def async_step_reauth(self, entry_data: dict[str, Any]) -> FlowResult:
         self._reauth_entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
@@ -134,14 +151,18 @@ class EdcConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         errors: dict[str, str] = {}
+        error_detail = ""
         if user_input is not None:
             username = user_input[CONF_USERNAME].strip()
             password = user_input[CONF_PASSWORD]
-            error = await _validate_login(self.hass, username, password)
+            error, error_detail = await _validate_login(self.hass, username, password)
             if error:
                 errors["base"] = error
             else:
                 assert self._reauth_entry is not None
+                # New credentials -> the cached refresh token belongs to the old
+                # ones and must not be reused.
+                await async_clear_stored_tokens(self.hass, self._reauth_entry.entry_id)
                 self.hass.config_entries.async_update_entry(
                     self._reauth_entry,
                     data={
@@ -154,7 +175,12 @@ class EdcConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return self.async_abort(reason="reauth_successful")
 
         schema = vol.Schema({vol.Required(CONF_USERNAME): str, vol.Required(CONF_PASSWORD): str})
-        return self.async_show_form(step_id="reauth_confirm", data_schema=schema, errors=errors)
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={"error_detail": error_detail},
+        )
 
     @staticmethod
     def async_get_options_flow(
@@ -188,7 +214,7 @@ class EdcOptionsFlow(config_entries.OptionsFlow):
             elif ean in existing:
                 errors[CONF_EAN] = "ean_already_added"
             else:
-                error = await _validate_ean(self.hass, username, password, ean)
+                error, _detail = await _validate_ean(self.hass, username, password, ean)
                 if error:
                     errors[CONF_EAN] = error
 
