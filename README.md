@@ -215,7 +215,12 @@ přechodu rozešly o hodinu.
 
 Atribut je jen na entitě výroby, protože obsahuje obě série. Zabírá ~2 kB a
 mění se jednou denně, takže je to pro recorder zanedbatelné — vyřazovat ho
-z databáze není potřeba. Karta je v příkladech jako `6)`.
+z databáze není potřeba.
+
+Karta je v příkladech jako `6)`. Nad grafem má `markdown` kartu se součty za
+daný den (sdíleno, nesdíleno, celkem a podíl v %) — apexcharts umí v hlavičce
+zobrazit jen aktuální hodnotu série, což by u `data_generator` byl poslední
+15minutový interval, ne součet.
 
 ## Ladění
 
