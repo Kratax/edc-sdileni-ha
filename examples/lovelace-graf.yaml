@@ -1,0 +1,284 @@
+# Ukázkové Lovelace karty pro EDC sdílení elektřiny
+# =================================================
+#
+# Všude níž nahraď EAN v entity ID za svůj. Skutečné entity si najdeš
+# v Nástroje pro vývojáře -> Stavy, filtr "edc".
+#
+#   sensor.edc_<EAN>_vyroba_export             kWh, výroba za poslední uzavřený den
+#   sensor.edc_<EAN>_uspesne_sdileno           kWh, z toho úspěšně sdíleno
+#   sensor.edc_<EAN>_podil_sdilene_elektriny   %
+#
+# Grafy níž nečtou recorder, ale atribut `historie_dni` obou energetických
+# entit. Ten obsahuje celou dosud známou historii po dnech:
+#
+#   {"2026-08-01": {"measured": 24.1, "shared": 21.2}, ...}
+#
+# Praktický důsledek: graf se vykreslí kompletní hned po instalaci, včetně
+# historie doplněné zpětně z portálu, a nezávisí na tom, jak dlouho a jak
+# podrobně ti recorder drží data.
+#
+# Karty s `type: custom:apexcharts-card` potřebují ApexCharts Card
+# (HACS -> Frontend -> ApexCharts Card). Poslední příklad ApexCharts nepotřebuje.
+
+
+# ---------------------------------------------------------------------------
+# 1) Skládaný sloupcový graf: export po dnech, uvnitř sdílená část
+# ---------------------------------------------------------------------------
+# Pozor na past: naskládat na sebe "export" a "sdíleno" by tu samou elektřinu
+# počítalo dvakrát, protože sdíleno je podmnožina exportu. Proto se skládá
+# `sdíleno` + `nesdíleno` (= export - sdíleno) a výška celého sloupce pak
+# odpovídá celkovému exportu.
+
+type: custom:apexcharts-card
+graph_span: 30d
+span:
+  end: day
+stacked: true
+header:
+  show: true
+  title: Export a sdílení po dnech
+  show_states: false
+apex_config:
+  chart:
+    height: 320
+  plotOptions:
+    bar:
+      columnWidth: 70%
+      borderRadius: 4
+  legend:
+    position: top
+    horizontalAlign: left
+  dataLabels:
+    enabled: false
+  tooltip:
+    shared: true
+    intersect: false
+  yaxis:
+    decimalsInFloat: 1
+series:
+  - name: Sdíleno
+    entity: sensor.edc_859182400312427576_vyroba_export
+    type: column
+    color: "#1baf7a"
+    unit: " kWh"
+    float_precision: 2
+    data_generator: |
+      const h = entity.attributes.historie_dni || {};
+      return Object.keys(h).sort().map(d =>
+        [new Date(d + "T12:00:00").getTime(), h[d].shared]);
+  - name: Nesdíleno
+    entity: sensor.edc_859182400312427576_vyroba_export
+    type: column
+    color: "#898781"
+    unit: " kWh"
+    float_precision: 2
+    data_generator: |
+      const h = entity.attributes.historie_dni || {};
+      return Object.keys(h).sort().map(d =>
+        [new Date(d + "T12:00:00").getTime(), Math.max(0, h[d].measured - h[d].shared)]);
+
+# `new Date(d + "T12:00:00")` je záměr, ne překlep. Datum bez času se parsuje
+# jako UTC midnight a ve středoevropském letním čase by sloupec spadl o den
+# vedle. Poledne má k obojí hranici dne dost rezervy.
+
+
+# ---------------------------------------------------------------------------
+# 2) Totéž po měsících — přehled za celý rok
+# ---------------------------------------------------------------------------
+# Stejná data, jen posčítaná do měsíců. Hodí se, když už máš historie víc než
+# pár týdnů a denní sloupce se přestávají dát přečíst.
+
+type: custom:apexcharts-card
+graph_span: 365d
+span:
+  end: day
+stacked: true
+header:
+  show: true
+  title: Export a sdílení po měsících
+  show_states: false
+apex_config:
+  chart:
+    height: 320
+  plotOptions:
+    bar:
+      columnWidth: 60%
+      borderRadius: 4
+  legend:
+    position: top
+    horizontalAlign: left
+  dataLabels:
+    enabled: false
+  tooltip:
+    shared: true
+    intersect: false
+series:
+  - name: Sdíleno
+    entity: sensor.edc_859182400312427576_vyroba_export
+    type: column
+    color: "#1baf7a"
+    unit: " kWh"
+    float_precision: 0
+    group_by:
+      func: sum
+      duration: 1month
+    data_generator: |
+      const h = entity.attributes.historie_dni || {};
+      return Object.keys(h).sort().map(d =>
+        [new Date(d + "T12:00:00").getTime(), h[d].shared]);
+  - name: Nesdíleno
+    entity: sensor.edc_859182400312427576_vyroba_export
+    type: column
+    color: "#898781"
+    unit: " kWh"
+    float_precision: 0
+    group_by:
+      func: sum
+      duration: 1month
+    data_generator: |
+      const h = entity.attributes.historie_dni || {};
+      return Object.keys(h).sort().map(d =>
+        [new Date(d + "T12:00:00").getTime(), Math.max(0, h[d].measured - h[d].shared)]);
+
+
+# ---------------------------------------------------------------------------
+# 3) Celá sekce dashboardu: čísla + graf
+# ---------------------------------------------------------------------------
+# Vlož jako jednu kartu (Přidat kartu -> Ruční). Podíl sdílení je schválně
+# samostatná dlaždice a ne křivka v grafu — mělo by to jinou jednotku a
+# druhá osa dělá ze skládaného grafu nepřehlednou kaši.
+
+type: vertical-stack
+cards:
+  - type: glance
+    title: EDC sdílení — poslední uzavřený den
+    show_name: true
+    show_state: true
+    columns: 3
+    entities:
+      - entity: sensor.edc_859182400312427576_vyroba_export
+        name: Export
+      - entity: sensor.edc_859182400312427576_uspesne_sdileno
+        name: Sdíleno
+      - entity: sensor.edc_859182400312427576_podil_sdilene_elektriny
+        name: Podíl
+
+  - type: custom:apexcharts-card
+    graph_span: 30d
+    span:
+      end: day
+    stacked: true
+    header:
+      show: false
+    apex_config:
+      chart:
+        height: 260
+      plotOptions:
+        bar:
+          columnWidth: 70%
+          borderRadius: 4
+      legend:
+        position: top
+        horizontalAlign: left
+      dataLabels:
+        enabled: false
+      tooltip:
+        shared: true
+        intersect: false
+    series:
+      - name: Sdíleno
+        entity: sensor.edc_859182400312427576_vyroba_export
+        type: column
+        color: "#1baf7a"
+        unit: " kWh"
+        float_precision: 2
+        data_generator: |
+          const h = entity.attributes.historie_dni || {};
+          return Object.keys(h).sort().map(d =>
+            [new Date(d + "T12:00:00").getTime(), h[d].shared]);
+      - name: Nesdíleno
+        entity: sensor.edc_859182400312427576_vyroba_export
+        type: column
+        color: "#898781"
+        unit: " kWh"
+        float_precision: 2
+        data_generator: |
+          const h = entity.attributes.historie_dni || {};
+          return Object.keys(h).sort().map(d =>
+            [new Date(d + "T12:00:00").getTime(), Math.max(0, h[d].measured - h[d].shared)]);
+
+
+# ---------------------------------------------------------------------------
+# 4) Víc EANů v jednom grafu
+# ---------------------------------------------------------------------------
+# Skládá se export po EANech. Sdílenou část tady vidět nejde — jedna osa
+# neunese dvě dělení současně. Když chceš u každého EANu i sdílení, dej
+# vedle sebe víc grafů z příkladu 1.
+
+type: custom:apexcharts-card
+graph_span: 30d
+span:
+  end: day
+stacked: true
+header:
+  show: true
+  title: Export po EANech
+  show_states: false
+apex_config:
+  chart:
+    height: 320
+  plotOptions:
+    bar:
+      columnWidth: 70%
+      borderRadius: 4
+  legend:
+    position: top
+    horizontalAlign: left
+  dataLabels:
+    enabled: false
+  tooltip:
+    shared: true
+    intersect: false
+series:
+  - name: EAN ...427576
+    entity: sensor.edc_859182400312427576_vyroba_export
+    type: column
+    color: "#2a78d6"
+    unit: " kWh"
+    float_precision: 2
+    data_generator: |
+      const h = entity.attributes.historie_dni || {};
+      return Object.keys(h).sort().map(d =>
+        [new Date(d + "T12:00:00").getTime(), h[d].measured]);
+  - name: EAN ...999999
+    entity: sensor.edc_859182400312999999_vyroba_export
+    type: column
+    color: "#eb6834"
+    unit: " kWh"
+    float_precision: 2
+    data_generator: |
+      const h = entity.attributes.historie_dni || {};
+      return Object.keys(h).sort().map(d =>
+        [new Date(d + "T12:00:00").getTime(), h[d].measured]);
+
+
+# ---------------------------------------------------------------------------
+# 5) Bez ApexCharts — vestavěná statistics-graph karta
+# ---------------------------------------------------------------------------
+# Když nechceš instalovat další kartu z HACS. Omezení, se kterými je potřeba
+# počítat: skládat sloupce neumí (obě série jsou vedle sebe), a kreslí jen to,
+# co má v dlouhodobých statistikách — tedy od instalace integrace dál, ne
+# historii doplněnou zpětně z portálu.
+
+type: statistics-graph
+title: Export a sdílení po dnech
+chart_type: bar
+period: day
+days_to_show: 30
+stat_types:
+  - sum
+entities:
+  - entity: sensor.edc_859182400312427576_vyroba_export
+    name: Export
+  - entity: sensor.edc_859182400312427576_uspesne_sdileno
+    name: Sdíleno
