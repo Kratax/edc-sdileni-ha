@@ -86,9 +86,21 @@ async def async_fetch_overview(
 def _column_indexes(payload: dict, ean: str) -> tuple[int | None, int | None]:
     """Find which entries in each row's `values` belong to this EAN.
 
-    `valueColumns` describes the layout: `dir` IN is metered production
-    (export), OUT is the volume that was successfully shared. Positions are
-    not guaranteed, so they're always looked up rather than assumed.
+    `valueColumns` describes the layout. What the two directions actually mean
+    was verified against the portal's own "Podíl spotřeby energie" figures for
+    2026-07-31:
+
+        IN  = 41.52 kWh  total metered delivery (export)
+        OUT = 39.84 kWh  the portal's "Prodáno obchodníkovi"
+        -> successfully shared = IN - OUT = 1.68 kWh, matching the portal's
+           "Sdílená energie" and its 4.0 % share
+
+    So OUT is *not* the shared volume - it is the part of the export that left
+    the sharing scheme and was sold to the trader. Earlier versions treated OUT
+    as "shared", which reported the two the wrong way round.
+
+    Positions in `values` are not guaranteed, so they're always looked up by
+    `dir` rather than assumed.
     """
     columns = payload.get("valueColumns", [])
     in_idx = next(
@@ -104,6 +116,18 @@ def _value_at(values: list, idx: int | None) -> float:
     if idx is None or idx >= len(values):
         return 0.0
     return values[idx].get("v") or 0.0
+
+
+def _split(values: list, in_idx: int | None, out_idx: int | None) -> tuple[float, float]:
+    """One interval's (total export, successfully shared) in kWh.
+
+    Shared is a derived number, not something the API hands over: it's the
+    export minus what was sold to the trader. Clamped at zero because rounding
+    in the source data can otherwise produce a tiny negative share.
+    """
+    exported = _value_at(values, in_idx)
+    sold_to_trader = _value_at(values, out_idx)
+    return exported, max(0.0, exported - sold_to_trader)
 
 
 def parse_intervals(payload: dict, ean: str, day: str) -> dict | None:
@@ -130,16 +154,21 @@ def parse_intervals(payload: dict, ean: str, day: str) -> dict | None:
     produced: list[float] = []
     shared: list[float] = []
     for row in rows:
-        values = row.get("values", [])
+        exported, was_shared = _split(row.get("values", []), in_idx, out_idx)
         times.append(row.get("start"))
-        produced.append(round(_value_at(values, in_idx), 3))
-        shared.append(round(_value_at(values, out_idx), 3))
+        produced.append(round(exported, 3))
+        shared.append(round(was_shared, 3))
 
     return {"datum": day, "casy": times, "vyroba": produced, "sdileno": shared}
 
 
 def parse_days(payload: dict, ean: str) -> dict[str, dict[str, float]]:
     """Sum 15-min interval values into per-day totals.
+
+    The shared volume is derived per interval and only then summed. Doing it
+    the other way round (sum both columns, subtract at the end) would give the
+    same number here, but per-interval keeps the daily totals consistent with
+    `parse_intervals` even when a single interval needs clamping.
 
     Only days that are ACTUALLY present in the response are returned - if the
     portal hasn't processed/settled a day yet it simply won't appear in
@@ -154,9 +183,9 @@ def parse_days(payload: dict, ean: str) -> dict[str, dict[str, float]]:
         if not d:
             continue
         bucket = days.setdefault(d, {"measured": 0.0, "shared": 0.0})
-        values = row.get("values", [])
-        bucket["measured"] += _value_at(values, in_idx)
-        bucket["shared"] += _value_at(values, out_idx)
+        exported, was_shared = _split(row.get("values", []), in_idx, out_idx)
+        bucket["measured"] += exported
+        bucket["shared"] += was_shared
 
     for d in days:
         days[d]["measured"] = round(days[d]["measured"], 3)

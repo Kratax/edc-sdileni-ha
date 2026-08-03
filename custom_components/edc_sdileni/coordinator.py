@@ -21,6 +21,7 @@ from .api import (
 from .auth import EdcTokenManager
 from .const import (
     CHUNK_DAYS,
+    DATA_VERSION,
     RETRY_FIRST_DELAY,
     RETRY_REPEAT_DELAY,
     STORAGE_KEY_PREFIX,
@@ -79,12 +80,52 @@ class EdcCoordinator(DataUpdateCoordinator):
         # Keep the last known 15-min curve across restarts so the detail chart
         # isn't blank until the next daily poll.
         self.intervals = stored.get("intervals") if stored else None
+
+        if stored and stored.get("data_version", 1) < DATA_VERSION:
+            await self._async_migrate_shared_semantics()
+
         _LOGGER.debug(
             "EDC sdílení (%s): načteno %d dní z lokálního úložiště", self._ean, len(self.history)
         )
 
+    async def _async_migrate_shared_semantics(self) -> None:
+        """Recompute history saved by versions that mislabelled `shared`.
+
+        Up to 1.2 `shared` held the API's OUT column, which is the volume sold
+        to the trader, not the shared one. The correct value is
+        `measured - sold`, and since `measured` was right all along the fix is
+        pure arithmetic - no refetch, so months of backfilled history survive
+        an upgrade instead of being re-downloaded or silently left wrong.
+        """
+        for day, totals in self.history.items():
+            measured = totals.get("measured", 0.0)
+            sold_to_trader = totals.get("shared", 0.0)
+            totals["shared"] = round(max(0.0, measured - sold_to_trader), 3)
+
+        detail = self.intervals
+        if detail and detail.get("vyroba") and detail.get("sdileno"):
+            detail["sdileno"] = [
+                round(max(0.0, v - s), 3)
+                for v, s in zip(detail["vyroba"], detail["sdileno"])
+            ]
+
+        _LOGGER.warning(
+            "EDC sdílení (%s): přepočítáno %d dní historie — do verze 1.2 se jako "
+            "'sdíleno' ukládal objem prodaný obchodníkovi (sloupec OUT), správně je "
+            "to rozdíl dodávky a prodeje",
+            self._ean,
+            len(self.history),
+        )
+        await self._async_save_history()
+
     async def _async_save_history(self) -> None:
-        await self._store.async_save({"days": self.history, "intervals": self.intervals})
+        await self._store.async_save(
+            {
+                "days": self.history,
+                "intervals": self.intervals,
+                "data_version": DATA_VERSION,
+            }
+        )
 
     # ------------------------------------------------------------- fetching
     async def _async_fetch_range(

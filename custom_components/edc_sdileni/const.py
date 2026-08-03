@@ -60,6 +60,13 @@ CHUNK_DAYS = 60
 
 STORAGE_VERSION = 1
 STORAGE_KEY_PREFIX = f"{DOMAIN}_history"
+
+# Semantics version of what's inside the history store, independent of the HA
+# Store format version. Bumped when the meaning of stored numbers changes and
+# already-saved data has to be recomputed.
+#   1 -> `shared` wrongly held the volume sold to the trader (API's OUT column)
+#   2 -> `shared` holds the actually shared volume (IN - OUT)
+DATA_VERSION = 2
 # Where the (long-lived) refresh token is cached so a Home Assistant restart
 # doesn't need to log in again.
 TOKEN_STORAGE_KEY_PREFIX = f"{DOMAIN}_tokens"
