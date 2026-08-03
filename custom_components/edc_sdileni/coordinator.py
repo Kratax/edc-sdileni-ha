@@ -11,7 +11,13 @@ from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .api import EdcAuthError, async_fetch_overview, ean_is_missing, parse_days
+from .api import (
+    EdcAuthError,
+    async_fetch_overview,
+    ean_is_missing,
+    parse_days,
+    parse_intervals,
+)
 from .auth import EdcTokenManager
 from .const import (
     CHUNK_DAYS,
@@ -57,6 +63,9 @@ class EdcCoordinator(DataUpdateCoordinator):
         self._history_start = history_start
         self._store: Store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{ean}")
         self.history: dict[str, dict[str, float]] = {}
+        # 15-minute curve of the most recent settled day, for the detail chart.
+        self.intervals: dict | None = None
+        self._interval_candidates: dict[str, dict] = {}
         self._retry_unsub = None
         self._consecutive_failures = 0
         self.ean_not_found = False
@@ -67,22 +76,34 @@ class EdcCoordinator(DataUpdateCoordinator):
     async def async_load_history(self) -> None:
         stored = await self._store.async_load()
         self.history = stored.get("days", {}) if stored else {}
+        # Keep the last known 15-min curve across restarts so the detail chart
+        # isn't blank until the next daily poll.
+        self.intervals = stored.get("intervals") if stored else None
         _LOGGER.debug(
             "EDC sdílení (%s): načteno %d dní z lokálního úložiště", self._ean, len(self.history)
         )
 
     async def _async_save_history(self) -> None:
-        await self._store.async_save({"days": self.history})
+        await self._store.async_save({"days": self.history, "intervals": self.intervals})
 
     # ------------------------------------------------------------- fetching
-    async def _async_fetch_range(self, date_from: date, date_to: date) -> dict[str, dict]:
+    async def _async_fetch_range(
+        self, date_from: date, date_to: date, collect_intervals: bool = False
+    ) -> dict[str, dict]:
         """Fetch+parse one date range, chunked, merging into self.history.
+
+        With `collect_intervals` the same payloads are also mined for their
+        15-minute detail. That's only worth doing for the short daily poll -
+        a 180-day backfill would build a pointlessly large structure to then
+        throw all but one day of it away.
 
         Stops immediately (without raising) if the portal reports our EAN as
         unknown - that's a permanent condition, not something retries fix.
         """
         if self.ean_not_found:
             return {}
+        if collect_intervals:
+            self._interval_candidates = {}
 
         session = async_get_clientsession(self.hass)
         token = await self._tokens.async_get_access_token()
@@ -121,6 +142,14 @@ class EdcCoordinator(DataUpdateCoordinator):
             if days:
                 self.history.update(days)
                 new_days.update(days)
+
+            if collect_intervals:
+                for day in days:
+                    detail = parse_intervals(payload, self._ean, day)
+                    if detail:
+                        self._interval_candidates[day] = detail
+
+            if days:
                 await self._async_save_history()
         return new_days
 
@@ -130,7 +159,7 @@ class EdcCoordinator(DataUpdateCoordinator):
             return self._build_result()
         today = date.today()
         date_from = today - timedelta(days=3)
-        await self._async_fetch_range(date_from, today)
+        await self._async_fetch_range(date_from, today, collect_intervals=True)
         return self._build_result()
 
     def _build_result(self) -> dict:
@@ -142,10 +171,19 @@ class EdcCoordinator(DataUpdateCoordinator):
             known = [d for d in self.history if d < today.isoformat()]
             latest_date = max(known) if known else None
         latest = self.history.get(latest_date, {"measured": 0.0, "shared": 0.0})
+
+        # Prefer the 15-min detail for whichever day the sensors are reporting.
+        # If this poll didn't return it (day not settled yet), keep whatever we
+        # had rather than blanking the chart.
+        candidate = self._interval_candidates.get(latest_date) if latest_date else None
+        if candidate:
+            self.intervals = candidate
+
         return {
             "days": self.history,
             "latest_date": latest_date,
             "latest": latest,
+            "intervals": self.intervals,
             "ean_not_found": self.ean_not_found,
         }
 

@@ -24,6 +24,7 @@ __all__ = [
     "async_fetch_overview",
     "ean_is_missing",
     "parse_days",
+    "parse_intervals",
 ]
 
 
@@ -82,13 +83,12 @@ async def async_fetch_overview(
         raise EdcApiError(f"EDC API nedostupné: {err}") from err
 
 
-def parse_days(payload: dict, ean: str) -> dict[str, dict[str, float]]:
-    """Sum 15-min interval values into per-day totals.
+def _column_indexes(payload: dict, ean: str) -> tuple[int | None, int | None]:
+    """Find which entries in each row's `values` belong to this EAN.
 
-    Only days that are ACTUALLY present in the response are returned - if the
-    portal hasn't processed/settled a day yet it simply won't appear in
-    `content`, and we must not invent a zero entry for it (that would
-    permanently hide the gap instead of retrying later).
+    `valueColumns` describes the layout: `dir` IN is metered production
+    (export), OUT is the volume that was successfully shared. Positions are
+    not guaranteed, so they're always looked up rather than assumed.
     """
     columns = payload.get("valueColumns", [])
     in_idx = next(
@@ -97,6 +97,56 @@ def parse_days(payload: dict, ean: str) -> dict[str, dict[str, float]]:
     out_idx = next(
         (i for i, c in enumerate(columns) if c.get("dir") == "OUT" and c.get("ean") == ean), None
     )
+    return in_idx, out_idx
+
+
+def _value_at(values: list, idx: int | None) -> float:
+    if idx is None or idx >= len(values):
+        return 0.0
+    return values[idx].get("v") or 0.0
+
+
+def parse_intervals(payload: dict, ean: str, day: str) -> dict | None:
+    """Pull the 15-minute curve for a single day out of the same payload.
+
+    The API already returns this detail - `parse_days` just sums it away - so
+    this costs no extra request. Returns None when the day isn't in the
+    payload at all.
+
+    The times come from the response rather than being computed as
+    `index * 15 min`, because clock-change days have 92 or 100 intervals
+    instead of 96 and generated times would drift by an hour after the switch.
+
+    Shape is three parallel arrays instead of a list of objects to keep the
+    entity attribute small (~2 kB instead of ~6 kB for 96 intervals).
+    """
+    in_idx, out_idx = _column_indexes(payload, ean)
+    rows = [r for r in payload.get("content", []) if r.get("date") == day]
+    if not rows:
+        return None
+    rows.sort(key=lambda r: (r.get("order") or 0, r.get("start") or ""))
+
+    times: list[str] = []
+    produced: list[float] = []
+    shared: list[float] = []
+    for row in rows:
+        values = row.get("values", [])
+        times.append(row.get("start"))
+        produced.append(round(_value_at(values, in_idx), 3))
+        shared.append(round(_value_at(values, out_idx), 3))
+
+    return {"datum": day, "casy": times, "vyroba": produced, "sdileno": shared}
+
+
+def parse_days(payload: dict, ean: str) -> dict[str, dict[str, float]]:
+    """Sum 15-min interval values into per-day totals.
+
+    Only days that are ACTUALLY present in the response are returned - if the
+    portal hasn't processed/settled a day yet it simply won't appear in
+    `content`, and we must not invent a zero entry for it (that would
+    permanently hide the gap instead of retrying later).
+    """
+    in_idx, out_idx = _column_indexes(payload, ean)
 
     days: dict[str, dict[str, float]] = {}
     for row in payload.get("content", []):
@@ -105,10 +155,8 @@ def parse_days(payload: dict, ean: str) -> dict[str, dict[str, float]]:
             continue
         bucket = days.setdefault(d, {"measured": 0.0, "shared": 0.0})
         values = row.get("values", [])
-        if in_idx is not None and in_idx < len(values):
-            bucket["measured"] += values[in_idx].get("v") or 0.0
-        if out_idx is not None and out_idx < len(values):
-            bucket["shared"] += values[out_idx].get("v") or 0.0
+        bucket["measured"] += _value_at(values, in_idx)
+        bucket["shared"] += _value_at(values, out_idx)
 
     for d in days:
         days[d]["measured"] = round(days[d]["measured"], 3)

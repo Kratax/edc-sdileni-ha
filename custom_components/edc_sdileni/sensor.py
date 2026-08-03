@@ -94,12 +94,18 @@ class EdcEnergySensor(_EdcBaseSensor):
     @property
     def extra_state_attributes(self):
         data = self._coordinator.data or {}
-        return {
+        attrs = {
             "ean": self._ean,
             "datum": data.get("latest_date"),
             "pocet_znamych_dni": len(data.get("days", {})),
             "historie_dni": data.get("days"),
         }
+        # The 15-min curve goes on the production sensor only. Both series
+        # (výroba + sdíleno) are inside it, so putting it on both entities
+        # would just duplicate a couple of kilobytes for no benefit.
+        if self._key == "measured":
+            attrs["detail_15min"] = data.get("intervals")
+        return attrs
 
 
 class EdcShareRatioSensor(_EdcBaseSensor):
