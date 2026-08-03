@@ -162,9 +162,29 @@ entities:
 ```
 
 (Přesné `entity_id` si HA vygeneruje z názvu zařízení — zkontroluj v
-**Nastavení → Zařízení a služby → Entity**. Hodí se i `gauge` karta na podíl
-sdílené elektřiny, nebo `history-graph`/ApexCharts nad všemi entitami napříč
-zařízeními.)
+**Nastavení → Zařízení a služby → Entity**.)
+
+### Skládaný graf export vs. sdílení
+
+Hotové konfigurace najdeš v **[`examples/lovelace-graf.yaml`](examples/lovelace-graf.yaml)**
+— skládaný sloupcový graf po dnech i po měsících, celá sekce dashboardu,
+varianta pro víc EANů a jedna verze bez ApexCharts.
+
+Grafy tam nečtou recorder, ale atribut **`historie_dni`** energetických entit.
+Ten obsahuje celou dosud známou historii po dnech:
+
+```json
+{"2026-08-01": {"measured": 24.1, "shared": 21.2}, ...}
+```
+
+Díky tomu se graf vykreslí kompletní hned po instalaci, včetně historie
+doplněné zpětně z portálu, a nezáleží na tom, jak dlouho a jak podrobně ti
+recorder drží data.
+
+Jedna věc, na kterou se dá naletět: naskládat na sebe *export* a *sdíleno* by
+tu samou elektřinu počítalo dvakrát — sdíleno je podmnožina exportu. Skládá se
+proto `sdíleno` + `nesdíleno` (= `measured - shared`), takže výška celého
+sloupce odpovídá celkovému exportu.
 
 ## Ladění
 
