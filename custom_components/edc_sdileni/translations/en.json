@@ -25,7 +25,8 @@
       "ean_not_found": "Tento EAN nebyl na portálu nalezen — zkontroluj, že je zadaný správně a že je registrovaný ke sdílení.",
       "ean_already_added": "Tento EAN už je nastavený.",
       "required": "Toto pole je povinné.",
-      "invalid_date": "Datum musí být ve formátu RRRR-MM-DD."
+      "invalid_date": "Datum musí být ve formátu RRRR-MM-DD.",
+      "api_forbidden": "Signing in to EDC worked, but the portal refused the data request (SECURITY_OPERATION_NOT_ALLOWED). This is not a password problem. Detail: {error_detail}"
     },
     "abort": {
       "already_configured": "Tento účet už je nastavený.",
@@ -71,7 +72,8 @@
       "ean_not_found": "Tento EAN nebyl na portálu nalezen — zkontroluj, že je zadaný správně.",
       "ean_already_added": "Tento EAN už je nastavený.",
       "required": "Toto pole je povinné.",
-      "invalid_date": "Datum musí být ve formátu RRRR-MM-DD."
+      "invalid_date": "Datum musí být ve formátu RRRR-MM-DD.",
+      "api_forbidden": "Signing in to EDC worked, but the portal refused the data request (SECURITY_OPERATION_NOT_ALLOWED). This is not a password problem."
     },
     "abort": {
       "no_eans": "Není nastavený žádný EAN k odebrání."
