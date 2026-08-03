@@ -239,6 +239,18 @@ Integrace tohle jen replikuje bez nutnosti spouštět prohlížeč, ukládá den
 součty do vlastního perzistentního úložiště
 (`.storage/edc_sdileni_history_<EAN>`) a z něj počítá hodnoty senzorů.
 
+### Limit na délku dotazovaného rozsahu
+
+Portál nevrátí libovolně dlouhý rozsah — při překročení odpoví
+`HTTP 400` s validační chybou `MAX_PERIOD_RANGE_FOR_EXPORT` na poli `dateFrom`.
+Limit není nikde dokumentovaný, takže ho integrace **nehádá**: začne na 31 dnech
+a při odmítnutí blok půlí (31 → 15 → 7 → …), dokud neprojde. Zjištěnou velikost
+si uloží, aby to po restartu nezkoumala znovu.
+
+Do verze 1.2.2 se stahovalo po 60 dnech, což je nad limitem — každý backfill
+proto skončil chybou 400, zatímco denní dotaz (4 dny) fungoval. Výsledek vypadal
+jako „portál starší data nemá".
+
 ### Co znamenají sloupce `IN` a `OUT`
 
 Odpověď má pro každý EAN dva sloupce, popsané v `valueColumns` přes `dir`.
