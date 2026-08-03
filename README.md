@@ -15,9 +15,12 @@ entitami:
 
 | Entita | Popis | Jednotka |
 |---|---|---|
-| Výroba (export) | naměřená výroba za poslední uzavřený den | kWh |
-| Úspěšně sdíleno | kolik z výroby bylo úspěšně sdíleno | kWh |
-| Podíl sdílené elektřiny | sdíleno / výroba | % |
+| Výroba (export) | celková naměřená dodávka za poslední uzavřený den | kWh |
+| Úspěšně sdíleno | kolik z dodávky bylo skutečně sdíleno | kWh |
+| Podíl sdílené elektřiny | sdíleno / dodávka | % |
+
+Zbytek dodávky (`dodávka − sdíleno`) je to, co portál označuje jako
+**„Prodáno obchodníkovi"** — v grafech vystupuje jako „Nesdíleno".
 
 Energetické entity mají v atributu `historie_dni` i celou dosud známou
 historii po dnech — hodí se pro vlastní graf (`history-graph`, ApexCharts
@@ -223,13 +226,30 @@ Portál `portal.edc-cr.cz` je frontend, který volá:
 - `POST https://sso.portal.edc-cr.cz/auth/realms/edc/protocol/openid-connect/token`
   — Keycloak token endpoint (standardní OAuth2/OIDC, grant `password`)
 - `POST https://api.portal.edc-cr.cz/api/v0/profiles-data/standard/overview`
-  — vrátí 15minutová data (`IN` = naměřená výroba, `OUT` = výsledek
-  vyhodnocení sdílení) pro zadaný EAN a rozsah `dateFrom`/`dateTo`, a
+  — vrátí 15minutová data pro zadaný EAN a rozsah `dateFrom`/`dateTo`, a
   seznam `missingEans` pro EANy, které portál vůbec nezná
 
 Integrace tohle jen replikuje bez nutnosti spouštět prohlížeč, ukládá denní
 součty do vlastního perzistentního úložiště
 (`.storage/edc_sdileni_history_<EAN>`) a z něj počítá hodnoty senzorů.
+
+### Co znamenají sloupce `IN` a `OUT`
+
+Odpověď má pro každý EAN dva sloupce, popsané v `valueColumns` přes `dir`.
+Jejich význam je ověřený proti portálovému přehledu „Podíl spotřeby energie"
+za 31. 7. 2026:
+
+| | hodnota | co to je v portálu |
+|---|---|---|
+| `IN` | 41,52 kWh | celková dodávka (export) |
+| `OUT` | 39,84 kWh | **Prodáno obchodníkovi** |
+| `IN − OUT` | 1,68 kWh | **Sdílená energie** (portál uvádí 4,0 %) |
+
+`OUT` tedy **není** sdílený objem, ale ta část dodávky, která ze sdílení odešla
+obchodníkovi. Sdílení je až rozdíl. Verze do 1.2 včetně brala `OUT` jako
+„sdíleno", takže obě čísla reportovala obráceně; 1.2.1 to opravuje a při prvním
+startu **přepočítá i už uloženou historii** (`shared = measured − shared`) —
+bez nového dotazu na portál, takže se měsíce zpětně doplněných dat neztratí.
 
 ## Poznámka k testování
 
