@@ -31,7 +31,12 @@ password. If the scope is refused we retry without it, and if the whole browser
 flow is unavailable we fall back to the plain password grant.
 
 Everything here uses a throwaway `aiohttp` session with its own cookie jar, so
-Keycloak's session cookies never leak into Home Assistant's shared jar.
+Keycloak's session cookies never leak into Home Assistant's shared jar. That
+session is created with `auto_cleanup=False` and released with `detach()`, never
+`close()`: Home Assistant hands out a *shared* TCP connector, and since aiohttp
+sessions own their connector by default, calling `close()` would tear down the
+connector every other integration is using. HA patches `close()` to warn about
+exactly this.
 """
 from __future__ import annotations
 
@@ -406,9 +411,10 @@ async def async_login(hass: HomeAssistant, username: str, password: str) -> EdcT
     it, then the password grant with and without it. The first success wins;
     the last meaningful error is what the user gets told about.
     """
-    # Own cookie jar: Keycloak's session cookies are ours alone and are thrown
-    # away as soon as the login finishes.
-    session = async_create_clientsession(hass, verify_ssl=True)
+    # A fresh session means a fresh cookie jar, so Keycloak's session cookies
+    # are ours alone and disappear when the login finishes. auto_cleanup=False
+    # because we release it ourselves right below - see the module docstring.
+    session = async_create_clientsession(hass, verify_ssl=True, auto_cleanup=False)
     attempts = (
         ("browser", SCOPE_OFFLINE),
         ("browser", SCOPE_BASIC),
@@ -455,7 +461,8 @@ async def async_login(hass: HomeAssistant, username: str, password: str) -> EdcT
             )
             return tokens
     finally:
-        await session.close()
+        # detach(), not close(): the connector belongs to Home Assistant.
+        session.detach()
 
     # Credentials being wrong is the far more actionable diagnosis, so it wins
     # over a transient technical failure when we have both.
@@ -466,7 +473,7 @@ async def async_refresh(hass: HomeAssistant, tokens: EdcTokens) -> EdcTokens:
     """Renew an access token from a refresh token. No password involved."""
     if not tokens.refresh_token:
         raise EdcAuthError("Chybí refresh token")
-    session = async_create_clientsession(hass, verify_ssl=True)
+    session = async_create_clientsession(hass, verify_ssl=True, auto_cleanup=False)
     try:
         renewed = await _async_token_request(
             session,
@@ -478,7 +485,7 @@ async def async_refresh(hass: HomeAssistant, tokens: EdcTokens) -> EdcTokens:
             offline=tokens.offline,
         )
     finally:
-        await session.close()
+        session.detach()
     # Keycloak may omit a new refresh token on rotation-disabled realms.
     if not renewed.refresh_token:
         renewed.refresh_token = tokens.refresh_token

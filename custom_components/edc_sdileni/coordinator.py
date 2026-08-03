@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
-from typing import Awaitable, Callable
+from datetime import date, timedelta
+from typing import Awaitable, Callable, NamedTuple
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -22,6 +22,7 @@ from .auth import EdcTokenManager
 from .const import (
     CHUNK_DAYS,
     DATA_VERSION,
+    RECENT_GAP_DAYS,
     RETRY_FIRST_DELAY,
     RETRY_REPEAT_DELAY,
     STORAGE_KEY_PREFIX,
@@ -29,6 +30,78 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class BackfillPlan(NamedTuple):
+    """What a backfill should fetch, decided without touching the network.
+
+    `unattempted` is the stretch of the configured range we have never queried;
+    only after fetching it successfully may `attempted_from` be advanced, so a
+    failed run is retried instead of being written off.
+
+    `gaps` is the span covering days inside the recent window that are missing
+    even though we already hold data from before them - i.e. days the portal
+    settled late.
+    """
+
+    unattempted: tuple[date, date] | None
+    gaps: tuple[date, date] | None
+
+    @property
+    def is_empty(self) -> bool:
+        return self.unattempted is None and self.gaps is None
+
+
+def plan_backfill(
+    known_days: set[str],
+    attempted_from: str | None,
+    history_start: date,
+    today: date,
+    recent_gap_days: int = RECENT_GAP_DAYS,
+) -> BackfillPlan:
+    """Decide what to fetch. Pure function - no I/O, no clock, fully testable.
+
+    The earlier version inferred "do we need a backfill?" from whether the
+    current month had gaps. The daily 4-day poll fills those in by itself, so
+    one failed backfill meant the check said "complete" forever and months of
+    history were never fetched. Hence `attempted_from`, tracked explicitly.
+
+    Days older than the earliest day we actually hold are never treated as
+    gaps: we already asked and the portal returned nothing (usually because
+    sharing started then), so asking again every startup is pure waste.
+    """
+    yesterday = today - timedelta(days=1)
+    if yesterday < history_start:
+        return BackfillPlan(None, None)
+
+    attempted = date.fromisoformat(attempted_from) if attempted_from else None
+
+    unattempted: tuple[date, date] | None = None
+    if attempted is None or attempted > history_start:
+        end = min(attempted - timedelta(days=1), yesterday) if attempted else yesterday
+        if history_start <= end:
+            unattempted = (history_start, end)
+
+    gaps: tuple[date, date] | None = None
+    if known_days:
+        window_start = max(
+            history_start,
+            yesterday - timedelta(days=recent_gap_days),
+            date.fromisoformat(min(known_days)),
+        )
+        if window_start <= yesterday:
+            window = {
+                (window_start + timedelta(days=i)).isoformat()
+                for i in range((yesterday - window_start).days + 1)
+            }
+            missing = sorted(window - known_days)
+            if missing:
+                gaps = (
+                    date.fromisoformat(missing[0]),
+                    date.fromisoformat(missing[-1]),
+                )
+
+    return BackfillPlan(unattempted, gaps)
 
 
 def _daterange_chunks(date_from: date, date_to: date, chunk_days: int):
@@ -67,6 +140,9 @@ class EdcCoordinator(DataUpdateCoordinator):
         # 15-minute curve of the most recent settled day, for the detail chart.
         self.intervals: dict | None = None
         self._interval_candidates: dict[str, dict] = {}
+        # Earliest date we have ever actually asked the portal about. Persisted,
+        # so "we already looked and there was nothing" survives a restart.
+        self._attempted_from: str | None = None
         self._retry_unsub = None
         self._consecutive_failures = 0
         self.ean_not_found = False
@@ -80,6 +156,7 @@ class EdcCoordinator(DataUpdateCoordinator):
         # Keep the last known 15-min curve across restarts so the detail chart
         # isn't blank until the next daily poll.
         self.intervals = stored.get("intervals") if stored else None
+        self._attempted_from = stored.get("attempted_from") if stored else None
 
         if stored and stored.get("data_version", 1) < DATA_VERSION:
             await self._async_migrate_shared_semantics()
@@ -123,6 +200,7 @@ class EdcCoordinator(DataUpdateCoordinator):
             {
                 "days": self.history,
                 "intervals": self.intervals,
+                "attempted_from": self._attempted_from,
                 "data_version": DATA_VERSION,
             }
         )
@@ -230,52 +308,38 @@ class EdcCoordinator(DataUpdateCoordinator):
 
     # -------------------------------------------------------------- backfill
     async def async_backfill_if_needed(self) -> None:
-        """On startup: if the current month has gaps, fetch everything missing
-        since history_start (bounded, configurable) through yesterday.
-        """
+        """Execute whatever `plan_backfill` decided is missing."""
         if self.ean_not_found:
             return
 
-        today = date.today()
-        yesterday = today - timedelta(days=1)
-        month_start = today.replace(day=1)
-        if yesterday < month_start:
-            # Today is the 1st of the month -> nothing from "this month" has
-            # fully elapsed yet. Check the previous month instead so we don't
-            # spuriously skip the gap-check right after a month boundary.
-            month_start = (month_start - timedelta(days=1)).replace(day=1)
-
-        month_days = {
-            (month_start + timedelta(days=i)).isoformat()
-            for i in range((yesterday - month_start).days + 1)
-        }
-
-        missing_this_month = month_days - self.history.keys()
-        if not missing_this_month:
+        plan = plan_backfill(
+            set(self.history), self._attempted_from, self._history_start, date.today()
+        )
+        if plan.is_empty:
             _LOGGER.debug(
-                "EDC sdílení (%s): aktuální měsíc je kompletní, backfill přeskočen", self._ean
+                "EDC sdílení (%s): historie je kompletní, backfill přeskočen", self._ean
             )
             return
 
-        full_range_days = {
-            (self._history_start + timedelta(days=i)).isoformat()
-            for i in range((yesterday - self._history_start).days + 1)
-        }
-        missing = sorted(full_range_days - self.history.keys())
-        if not missing:
-            return
+        if plan.unattempted:
+            start, end = plan.unattempted
+            _LOGGER.info(
+                "EDC sdílení (%s): stahuji dosud nedotazovaný rozsah %s – %s",
+                self._ean, start, end,
+            )
+            await self._async_fetch_range(start, end)
+            # Reached only on success - a failure propagates and leaves
+            # `attempted_from` alone so the next start tries again.
+            self._attempted_from = start.isoformat()
+            await self._async_save_history()
 
-        _LOGGER.info(
-            "EDC sdílení (%s): chybí %d dní od %s do %s, doplňuji z portálu",
-            self._ean,
-            len(missing),
-            missing[0],
-            missing[-1],
-        )
-        await self._async_fetch_range(
-            datetime.fromisoformat(missing[0]).date(),
-            datetime.fromisoformat(missing[-1]).date(),
-        )
+        if plan.gaps:
+            start, end = plan.gaps
+            _LOGGER.info(
+                "EDC sdílení (%s): chybí dny %s – %s, doplňuji z portálu",
+                self._ean, start, end,
+            )
+            await self._async_fetch_range(start, end)
 
     # ---------------------------------------------------------------- retry
     async def async_run_with_retry(self) -> None:

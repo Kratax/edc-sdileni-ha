@@ -54,6 +54,10 @@ API_TIMEOUT = 60
 RETRY_FIRST_DELAY = 300  # 5 minutes
 RETRY_REPEAT_DELAY = 3600  # 1 hour thereafter, until it succeeds
 
+# How far back to re-check for days the portal settled late. Days older than
+# this are assumed final and aren't queried again.
+RECENT_GAP_DAYS = 35
+
 # Split large backfill ranges into chunks so one flaky request doesn't lose
 # all progress, and so we don't ask the API for a huge date range at once.
 CHUNK_DAYS = 60
