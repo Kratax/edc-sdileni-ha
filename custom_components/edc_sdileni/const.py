@@ -58,9 +58,14 @@ RETRY_REPEAT_DELAY = 3600  # 1 hour thereafter, until it succeeds
 # this are assumed final and aren't queried again.
 RECENT_GAP_DAYS = 35
 
-# Split large backfill ranges into chunks so one flaky request doesn't lose
-# all progress, and so we don't ask the API for a huge date range at once.
-CHUNK_DAYS = 60
+# Split large backfill ranges into chunks so one flaky request doesn't lose all
+# progress. The portal also enforces an undocumented maximum span per call and
+# answers MAX_PERIOD_RANGE_FOR_EXPORT when it's exceeded - 60 days turned out to
+# be over that limit, which made every backfill fail with HTTP 400. This is only
+# a starting point: the coordinator halves it on rejection until it fits and
+# remembers what worked.
+CHUNK_DAYS = 31
+MIN_CHUNK_DAYS = 1
 
 STORAGE_VERSION = 1
 STORAGE_KEY_PREFIX = f"{DOMAIN}_history"

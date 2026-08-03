@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .api import (
     EdcAuthError,
+    EdcRangeTooLongError,
     async_fetch_overview,
     ean_is_missing,
     parse_days,
@@ -22,6 +23,7 @@ from .auth import EdcTokenManager
 from .const import (
     CHUNK_DAYS,
     DATA_VERSION,
+    MIN_CHUNK_DAYS,
     RECENT_GAP_DAYS,
     RETRY_FIRST_DELAY,
     RETRY_REPEAT_DELAY,
@@ -104,14 +106,6 @@ def plan_backfill(
     return BackfillPlan(unattempted, gaps)
 
 
-def _daterange_chunks(date_from: date, date_to: date, chunk_days: int):
-    cur = date_from
-    while cur <= date_to:
-        end = min(cur + timedelta(days=chunk_days - 1), date_to)
-        yield cur, end
-        cur = end + timedelta(days=1)
-
-
 class EdcCoordinator(DataUpdateCoordinator):
     """Fetches EDC sharing data for ONE EAN on a schedule, with retries and backfill.
 
@@ -143,6 +137,9 @@ class EdcCoordinator(DataUpdateCoordinator):
         # Earliest date we have ever actually asked the portal about. Persisted,
         # so "we already looked and there was nothing" survives a restart.
         self._attempted_from: str | None = None
+        # Largest span the portal has accepted so far. Discovered by halving on
+        # rejection and persisted, so a restart doesn't repeat the probing.
+        self._chunk_days = CHUNK_DAYS
         self._retry_unsub = None
         self._consecutive_failures = 0
         self.ean_not_found = False
@@ -157,6 +154,8 @@ class EdcCoordinator(DataUpdateCoordinator):
         # isn't blank until the next daily poll.
         self.intervals = stored.get("intervals") if stored else None
         self._attempted_from = stored.get("attempted_from") if stored else None
+        if stored and stored.get("chunk_days"):
+            self._chunk_days = max(MIN_CHUNK_DAYS, int(stored["chunk_days"]))
 
         if stored and stored.get("data_version", 1) < DATA_VERSION:
             await self._async_migrate_shared_semantics()
@@ -201,6 +200,7 @@ class EdcCoordinator(DataUpdateCoordinator):
                 "days": self.history,
                 "intervals": self.intervals,
                 "attempted_from": self._attempted_from,
+                "chunk_days": self._chunk_days,
                 "data_version": DATA_VERSION,
             }
         )
@@ -228,23 +228,40 @@ class EdcCoordinator(DataUpdateCoordinator):
         token = await self._tokens.async_get_access_token()
 
         new_days: dict[str, dict] = {}
-        for chunk_from, chunk_to in _daterange_chunks(date_from, date_to, CHUNK_DAYS):
+        cursor = date_from
+        while cursor <= date_to:
+            chunk_to = min(cursor + timedelta(days=self._chunk_days - 1), date_to)
             try:
                 payload = await async_fetch_overview(
-                    session, token, self._ean, chunk_from, chunk_to
+                    session, token, self._ean, cursor, chunk_to
                 )
+            except EdcRangeTooLongError:
+                # The portal caps how many days it will return in one call. Halve
+                # the window and retry the same start date; the smaller size is
+                # kept for the rest of the backfill and saved for next time.
+                if self._chunk_days <= MIN_CHUNK_DAYS:
+                    raise
+                self._chunk_days = max(MIN_CHUNK_DAYS, self._chunk_days // 2)
+                _LOGGER.info(
+                    "EDC sdílení (%s): portál odmítl rozsah jako příliš dlouhý, "
+                    "zkouším po %d dnech",
+                    self._ean,
+                    self._chunk_days,
+                )
+                continue
             except EdcAuthError:
                 # The API refused our token mid-run. That usually means it just
                 # expired (long backfill) or was revoked server-side, not that
                 # the password is wrong - so throw the token away and retry the
                 # same chunk once with a brand new one.
                 _LOGGER.debug(
-                    "EDC sdílení (%s): API odmítlo token, obnovuji a zkouším znovu", self._ean
+                    "EDC sdílení (%s): API odmítlo token, obnovuji a zkouším znovu",
+                    self._ean,
                 )
                 await self._tokens.async_invalidate()
                 token = await self._tokens.async_get_access_token()
                 payload = await async_fetch_overview(
-                    session, token, self._ean, chunk_from, chunk_to
+                    session, token, self._ean, cursor, chunk_to
                 )
 
             if ean_is_missing(payload, self._ean):
@@ -270,6 +287,9 @@ class EdcCoordinator(DataUpdateCoordinator):
 
             if days:
                 await self._async_save_history()
+
+            cursor = chunk_to + timedelta(days=1)
+
         return new_days
 
     async def _async_update_data(self):

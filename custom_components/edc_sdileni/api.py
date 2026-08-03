@@ -16,11 +16,25 @@ import async_timeout
 from .auth import EdcApiError, EdcAuthError
 from .const import API_TIMEOUT, API_URL, EDC_CONTRACT_TYPE, PORTAL_ORIGIN, REDIRECT_URI
 
+# The portal refuses date ranges longer than some undocumented maximum with this
+# validation code. We don't hardcode the limit - the caller halves its window and
+# retries until it fits, so an EDC-side change doesn't break the backfill.
+RANGE_TOO_LONG_CODE = "MAX_PERIOD_RANGE_FOR_EXPORT"
+
 _LOGGER = logging.getLogger(__name__)
+
+
+class EdcRangeTooLongError(EdcApiError):
+    """The requested date range exceeds what the portal allows in one call.
+
+    Permanent for that range - retrying it unchanged is pointless. The caller
+    has to ask for a shorter span instead.
+    """
 
 __all__ = [
     "EdcApiError",
     "EdcAuthError",
+    "EdcRangeTooLongError",
     "async_fetch_overview",
     "ean_is_missing",
     "parse_days",
@@ -73,6 +87,11 @@ async def async_fetch_overview(
                 if resp.status in (401, 403):
                     raise EdcAuthError(
                         f"EDC API odmítlo token (HTTP {resp.status}): {text[:200]}"
+                    )
+                if resp.status == 400 and RANGE_TOO_LONG_CODE in text:
+                    raise EdcRangeTooLongError(
+                        f"EDC nepovolilo rozsah {date_from} – {date_to} "
+                        f"({RANGE_TOO_LONG_CODE})"
                     )
                 if resp.status != 200:
                     raise EdcApiError(f"EDC API chyba (HTTP {resp.status}): {text[:200]}")
