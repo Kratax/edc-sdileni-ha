@@ -1,0 +1,86 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "EDC sdílení elektřiny",
+        "description": "Zadej přihlašovací údaje do portálu portal.edc-cr.cz a výrobní EAN, který chceš sledovat. Další EANy můžeš přidat později v Možnostech.",
+        "data": {
+          "username": "Přihlašovací jméno",
+          "password": "Heslo",
+          "ean": "Výrobní EAN"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Obnovit přihlášení k EDC",
+        "description": "Přihlašovací údaje k portálu EDC už nefungují. Zadej je znovu.",
+        "data": {
+          "username": "Přihlašovací jméno",
+          "password": "Heslo"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Přihlášení bylo odmítnuto — zkontroluj jméno a heslo (nebo EDC nepovoluje tento typ přihlášení, viz README).",
+      "cannot_connect": "Portál EDC není momentálně dostupný, zkus to prosím znovu.",
+      "ean_not_found": "Tento EAN nebyl na portálu nalezen — zkontroluj, že je zadaný správně a že je registrovaný ke sdílení.",
+      "ean_already_added": "Tento EAN už je nastavený.",
+      "required": "Toto pole je povinné.",
+      "invalid_date": "Datum musí být ve formátu RRRR-MM-DD."
+    },
+    "abort": {
+      "already_configured": "Tento účet už je nastavený.",
+      "reauth_successful": "Přihlášení bylo úspěšně obnoveno.",
+      "no_eans": "Není nastavený žádný EAN k odebrání."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "EDC sdílení elektřiny — možnosti",
+        "menu_options": {
+          "add_ean": "Přidat EAN",
+          "remove_ean": "Odebrat EAN",
+          "settings": "Nastavení stahování"
+        }
+      },
+      "add_ean": {
+        "title": "Přidat EAN",
+        "data": {
+          "ean": "Výrobní EAN"
+        }
+      },
+      "remove_ean": {
+        "title": "Odebrat EAN",
+        "data": {
+          "ean": "Vyber EAN k odebrání"
+        }
+      },
+      "settings": {
+        "title": "Nastavení stahování",
+        "data": {
+          "update_hour": "Hodina denní aktualizace",
+          "update_minute": "Minuta denní aktualizace",
+          "backfill_days": "Kolik dní zpět doplňovat, když není zadáno 'Začátek historie'",
+          "history_start": "Začátek historie (RRRR-MM-DD, např. datum registrace EAN)"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Přihlášení bylo odmítnuto — zkontroluj jméno a heslo.",
+      "cannot_connect": "Portál EDC není momentálně dostupný, zkus to prosím znovu.",
+      "ean_not_found": "Tento EAN nebyl na portálu nalezen — zkontroluj, že je zadaný správně.",
+      "ean_already_added": "Tento EAN už je nastavený.",
+      "required": "Toto pole je povinné.",
+      "invalid_date": "Datum musí být ve formátu RRRR-MM-DD."
+    },
+    "abort": {
+      "no_eans": "Není nastavený žádný EAN k odebrání."
+    }
+  },
+  "issues": {
+    "ean_not_found": {
+      "title": "EAN {ean} nebyl na portálu EDC nalezen",
+      "description": "Integrace EDC sdílení elektřiny pro EAN {ean} přestala stahovat data, protože ho portál nezná (chybný EAN, nebo už není registrovaný ke sdílení). Zkontroluj a případně oprav EAN v Nastavení -> Zařízení a služby -> EDC sdílení elektřiny -> Možnosti."
+    }
+  }
+}
