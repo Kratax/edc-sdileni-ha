@@ -90,6 +90,18 @@ s `offline_access`, pak bez něj. Chybu, kterou vrátí Keycloak, uvidíš
 v konfiguračním formuláři i v logu, takže je poznat rozdíl mezi špatným heslem,
 zablokovaným účtem a nedostupným SSO.
 
+Když Keycloak přihlašovací údaje výslovně odmítne, integrace **nezkouší další
+varianty** — opakované pokusy se stejným heslem jen spouštějí brute-force
+ochranu a dokážou zablokovat funkční účet.
+
+### Hlavička `Edc-Contract-Type`
+
+Samotný platný token na data nestačí. Backend EDC odpovídá
+`403 SECURITY_OPERATION_NOT_ALLOWED`, dokud request neobsahuje hlavičku
+`Edc-Contract-Type: STANDARD` — tu posílá i frontend portálu a odpovídá segmentu
+`/standard/` v URL API. Integrace ji posílá spolu s `X-Correlation-ID`, takže
+její requesty vypadají stejně jako ty z portálu.
+
 ## Instalace
 
 ### Varianta A — přes HACS (doporučeno)
