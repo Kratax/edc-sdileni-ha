@@ -51,13 +51,17 @@ karta apod.).
   nezkouší dokola (zbytečně by riskovala zablokování účtu) a rovnou nabídne
   v UI **"Znovu ověřit" (reauth)** formulář pro zadání nových údajů. Chyba se
   zapíše i do logu.
-- **Neexistující/špatný EAN:** pokud portál konkrétní EAN vůbec nezná (překlep,
-  není registrovaný ke sdílení...), integrace ho přestane zkoušet stahovat,
-  zapíše chybu do logu a založí upozornění v **Nastavení -> Opravy
-  (Repairs)**. Pokud jde o jediný nastavený EAN, celá integrace přejde do
-  chybového stavu ("Failed to set up"), dokud EAN neopravíš v Možnostech.
-  Pokud máš EANů víc a selže jen jeden, ostatní zařízení fungují dál beze
-  změny.
+- **EAN bez dat:** pokud portál pro konkrétní EAN nemá data za posledních 7 dní
+  (typicky nově zaregistrovaný EAN, který se sdílením ještě nezačal, nebo
+  překlep v EANu), integrace ho **nevyřazuje** a při každé další aktualizaci
+  to zkouší znovu — jen zapíše varování do logu a založí upozornění v
+  **Nastavení -> Opravy (Repairs)**, které samo zmizí, jakmile se data
+  objeví. Stahování ostatních EANů (i tohoto, jakmile data přijdou) běží dál
+  beze změny — integrace se kvůli tomu nevypíná, ani když jde o jediný
+  nastavený EAN.
+- **Logování opakovaných selhání:** aby log nezaplavila stejná hláška při
+  každém stahování, zapisuje se varování jen při prvním výskytu chyby a pak
+  přibližně **jednou denně**, dokud problém trvá.
 
 ## ⚠️ Než začneš — přečti si to
 
@@ -243,6 +247,23 @@ Portál `portal.edc-cr.cz` je frontend, který volá:
 Integrace tohle jen replikuje bez nutnosti spouštět prohlížeč, ukládá denní
 součty do vlastního perzistentního úložiště
 (`.storage/edc_sdileni_history_<EAN>`) a z něj počítá hodnoty senzorů.
+
+### Co znamená `missingEans`
+
+`missingEans` v odpovědi `overview` je vztažené **k dotazovanému období**
+(`dateFrom`/`dateTo`), ne k EANu samotnému — portál do něj zařadí každý EAN,
+pro který v daném rozsahu nemá žádná data, bez ohledu na důvod. Platný,
+správně zaregistrovaný EAN se v `missingEans` běžně objeví, pokud rozsah
+zahrnuje ještě **neuzavřený den** (dnešek, případně i včerejšek před ranní
+aktualizací) — portál pro něj prostě ještě nic nevyhodnotil.
+
+Do verze 1.2.3 integrace brala přítomnost EANu v `missingEans` jako **trvalý
+stav** ("tenhle EAN neexistuje"), a reagovala na něj vynuceným reloadem celé
+integrace. Po reloadu proběhl nový setup se stejným rozsahem, který znovu
+zahrnoval tentýž neuzavřený den — EAN skončil v `missingEans` znovu, a
+reload se spustil znovu, pořád dokola. 1.2.4 bere `missingEans` jako běžný
+a dočasný stav konkrétního dne, který se má jen přeskočit a zkusit znovu při
+další aktualizaci, ne jako signál k vypnutí EANu nebo reloadu integrace.
 
 ### Limit na délku dotazovaného rozsahu
 
