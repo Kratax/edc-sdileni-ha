@@ -133,7 +133,14 @@ def _column_indexes(payload: dict, ean: str) -> tuple[int | None, int | None]:
 def _value_at(values: list, idx: int | None) -> float:
     if idx is None or idx >= len(values):
         return 0.0
-    return values[idx].get("v") or 0.0
+    raw = values[idx].get("v")
+    if raw is None or raw == "":
+        return 0.0
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        _LOGGER.debug("EDC vrátilo nečíselnou hodnotu %r, beru jako 0.0", raw)
+        return 0.0
 
 
 def _split(values: list, in_idx: int | None, out_idx: int | None) -> tuple[float, float]:
