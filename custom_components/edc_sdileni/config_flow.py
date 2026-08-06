@@ -19,7 +19,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import EdcAuthError, async_fetch_overview, ean_is_missing
+from .api import EdcAuthError, async_fetch_overview, ean_has_no_data
 from .auth import async_clear_stored_tokens, async_login
 from .const import (
     CONF_BACKFILL_DAYS,
@@ -78,9 +78,14 @@ async def _validate_credentials_and_ean(
         _LOGGER.error("EDC sdílení: nešlo ověřit EAN %s (%s)", ean, err)
         return "cannot_connect", str(err)
 
-    if ean_is_missing(payload, ean):
-        _LOGGER.error("EDC sdílení: EAN %s nebyl na portálu nalezen", ean)
-        return "ean_not_found", ""
+    if ean_has_no_data(payload, ean):
+        # A typo and a freshly registered EAN are indistinguishable here, so this
+        # is worded as "no data yet" rather than "wrong EAN" - and it's still
+        # surfaced in the form so a typo doesn't pass silently.
+        _LOGGER.warning(
+            "EDC sdílení: portál nemá pro EAN %s data za posledních 7 dní", ean
+        )
+        return "ean_no_data", ""
     return None, ""
 
 
@@ -131,7 +136,7 @@ class EdcConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     self.hass, username, password, ean
                 )
                 if error:
-                    errors["base" if error != "ean_not_found" else CONF_EAN] = error
+                    errors["base" if error != "ean_no_data" else CONF_EAN] = error
                     error_detail = detail
 
             if not errors:

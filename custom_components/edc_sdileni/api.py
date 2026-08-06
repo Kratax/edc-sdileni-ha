@@ -36,7 +36,7 @@ __all__ = [
     "EdcAuthError",
     "EdcRangeTooLongError",
     "async_fetch_overview",
-    "ean_is_missing",
+    "ean_has_no_data",
     "parse_days",
     "parse_intervals",
 ]
@@ -47,10 +47,9 @@ async def async_fetch_overview(
 ) -> dict:
     """Fetch the raw 15-min overview payload for [date_from, date_to] (inclusive).
 
-    The response also contains `missingEans`: EANs the portal doesn't
-    recognise at all for this account (typo, not registered, no longer
-    shared, ...). Callers should check that list and stop retrying such
-    EANs rather than hammering the API for something that will never exist.
+    The response also contains `missingEans` - see `ean_has_no_data` for what
+    that actually means. It is scoped to the requested period and is not
+    evidence that an EAN is unknown.
     """
     headers = {
         "Authorization": f"Bearer {token}",
@@ -212,6 +211,16 @@ def parse_days(payload: dict, ean: str) -> dict[str, dict[str, float]]:
     return days
 
 
-def ean_is_missing(payload: dict, ean: str) -> bool:
-    """True if the portal explicitly reports this EAN as unknown."""
+def ean_has_no_data(payload: dict, ean: str) -> bool:
+    """True if the portal returned no data for this EAN in the requested period.
+
+    Named carefully, because the obvious reading of `missingEans` - "the portal
+    doesn't know this EAN" - is wrong and cost us an infinite reload loop.
+    The list is scoped to the requested range: a day the portal hasn't settled
+    yet puts a perfectly valid EAN in here. Asking for yesterday before the
+    morning settlement run is enough to trigger it.
+
+    So this is never on its own evidence that an EAN is wrong. Treat it as
+    "nothing for this period" and move on.
+    """
     return ean in (payload.get("missingEans") or [])

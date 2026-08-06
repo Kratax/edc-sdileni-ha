@@ -17,7 +17,7 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_change
 
-from .api import EdcAuthError, async_fetch_overview, ean_is_missing
+from .api import EdcAuthError, async_fetch_overview, ean_has_no_data
 from .auth import EdcTokenManager
 from .const import (
     CONF_BACKFILL_DAYS,
@@ -72,16 +72,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryNotReady(f"EDC portál nedostupný: {err}") from err
 
     # 2) Validate each configured EAN. EANs the portal doesn't recognise are
-    #    excluded (logged + a Repair issue is raised) instead of being
-    #    retried forever; transient check failures don't disqualify an EAN,
-    #    the coordinator's own retry logic handles those later.
+    #    flagged with a Repair issue - but still kept and retried on schedule.
+    #    The portal reports "no data" for a valid EAN whenever the period has
+    #    nothing settled yet, so this signal is a hint, never a verdict.
     today = date.today()
     probe_from = today - timedelta(days=7)
     valid_eans: list[str] = []
-    invalid_eans: list[str] = []
 
     for ean in eans:
-        issue_id = f"ean_not_found_{entry.entry_id}_{ean}"
+        issue_id = f"ean_no_data_{entry.entry_id}_{ean}"
+        # Clear the issue id used up to 1.2.3, otherwise a stale "EAN not found"
+        # warning from the reload-loop version would stay in Repairs forever.
+        ir.async_delete_issue(hass, DOMAIN, f"ean_not_found_{entry.entry_id}_{ean}")
         try:
             payload = await async_fetch_overview(session, token, ean, probe_from, today)
         except EdcAuthError:
@@ -94,31 +96,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             valid_eans.append(ean)  # transient - not a hard "not found"
             continue
 
-        if ean_is_missing(payload, ean):
-            _LOGGER.error(
-                "EDC sdílení: EAN %s nebyl na portálu nalezen, nebude se dál zkoušet stahovat. "
-                "Zkontroluj ho v Nastavení -> Zařízení a služby -> EDC sdílení elektřiny -> Možnosti.",
+        # The EAN is kept either way. A wrong EAN and a valid one whose data
+        # simply isn't published yet look identical here, and refusing to set
+        # up would break a legitimately fresh EAN. The Repair issue tells the
+        # user; the schedule keeps trying and clears it once data appears.
+        if ean_has_no_data(payload, ean):
+            _LOGGER.warning(
+                "EDC sdílení: portál nemá pro EAN %s žádná data za posledních 7 dní. "
+                "Pokud jsi ho právě zaregistroval ke sdílení, je to v pořádku a data "
+                "se objeví sama. Jinak si ho zkontroluj v Nastavení -> Zařízení "
+                "a služby -> EDC sdílení elektřiny -> Možnosti.",
                 ean,
             )
-            invalid_eans.append(ean)
             ir.async_create_issue(
                 hass,
                 DOMAIN,
                 issue_id,
                 is_fixable=False,
-                severity=ir.IssueSeverity.ERROR,
-                translation_key="ean_not_found",
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="ean_no_data",
                 translation_placeholders={"ean": ean},
             )
         else:
-            valid_eans.append(ean)
             ir.async_delete_issue(hass, DOMAIN, issue_id)
-
-    if not valid_eans:
-        raise ConfigEntryError(
-            "Žádný z nastavených EAN nebyl na portálu nalezen — zkontroluj EAN v možnostech "
-            "integrace (Nastavení -> Zařízení a služby -> EDC sdílení elektřiny -> Možnosti)."
-        )
+        valid_eans.append(ean)
 
     hour = entry.options.get(CONF_UPDATE_HOUR, DEFAULT_UPDATE_HOUR)
     minute = entry.options.get(CONF_UPDATE_MINUTE, DEFAULT_UPDATE_MINUTE)
@@ -134,21 +135,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.error("EDC sdílení: spouštím reauth flow kvůli neplatným přihlašovacím údajům")
         entry.async_start_reauth(hass)
 
-    async def _on_ean_not_found(ean: str) -> None:
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            f"ean_not_found_{entry.entry_id}_{ean}",
-            is_fixable=False,
-            severity=ir.IssueSeverity.ERROR,
-            translation_key="ean_not_found",
-            translation_placeholders={"ean": ean},
-        )
-        # Re-run entry setup so the (now known-bad) EAN is properly excluded;
-        # if it was the only EAN, this correctly puts the whole entry into
-        # an error state instead of leaving it silently half-broken.
-        hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
-
     coordinators: dict[str, EdcCoordinator] = {}
     unsub_timers = []
 
@@ -158,7 +144,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             token_manager,
             ean,
             history_start,
-            on_ean_not_found=_on_ean_not_found,
             on_auth_failure=_on_auth_failure,
         )
         await coordinator.async_load_history()
@@ -182,7 +167,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "token_manager": token_manager,
         "coordinators": coordinators,
-        "invalid_eans": invalid_eans,
         "unsub_timers": unsub_timers,
     }
 

@@ -15,7 +15,7 @@ from .api import (
     EdcAuthError,
     EdcRangeTooLongError,
     async_fetch_overview,
-    ean_is_missing,
+    ean_has_no_data,
     parse_days,
     parse_intervals,
 )
@@ -120,7 +120,6 @@ class EdcCoordinator(DataUpdateCoordinator):
         token_manager: EdcTokenManager,
         ean: str,
         history_start: date,
-        on_ean_not_found: Callable[[str], Awaitable[None]] | None = None,
         on_auth_failure: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         super().__init__(hass, _LOGGER, name=f"EDC sdílení ({ean})", update_interval=None)
@@ -142,8 +141,6 @@ class EdcCoordinator(DataUpdateCoordinator):
         self._chunk_days = CHUNK_DAYS
         self._retry_unsub = None
         self._consecutive_failures = 0
-        self.ean_not_found = False
-        self._on_ean_not_found = on_ean_not_found
         self._on_auth_failure = on_auth_failure
 
     # ---------------------------------------------------------------- store
@@ -216,11 +213,9 @@ class EdcCoordinator(DataUpdateCoordinator):
         a 180-day backfill would build a pointlessly large structure to then
         throw all but one day of it away.
 
-        Stops immediately (without raising) if the portal reports our EAN as
-        unknown - that's a permanent condition, not something retries fix.
+        A range the portal has no data for is skipped, not treated as fatal -
+        see `ean_has_no_data`.
         """
-        if self.ean_not_found:
-            return {}
         if collect_intervals:
             self._interval_candidates = {}
 
@@ -264,15 +259,21 @@ class EdcCoordinator(DataUpdateCoordinator):
                     session, token, self._ean, cursor, chunk_to
                 )
 
-            if ean_is_missing(payload, self._ean):
-                _LOGGER.error(
-                    "EDC sdílení (%s): portál tento EAN nezná, dál ho nebudu zkoušet stahovat",
+            if ean_has_no_data(payload, self._ean):
+                # Not an error and not permanent: the portal simply has nothing
+                # for this EAN in this range, most often because the day isn't
+                # settled yet. Earlier versions read it as "unknown EAN",
+                # flipped a permanent flag and asked for a config-entry reload -
+                # which re-ran setup, hit the same unsettled day and reloaded
+                # again, several times a second, without end.
+                _LOGGER.debug(
+                    "EDC sdílení (%s): portál nemá data pro %s – %s, zkusím to příště",
                     self._ean,
+                    cursor,
+                    chunk_to,
                 )
-                self.ean_not_found = True
-                if self._on_ean_not_found:
-                    await self._on_ean_not_found(self._ean)
-                break
+                cursor = chunk_to + timedelta(days=1)
+                continue
 
             days = parse_days(payload, self._ean)
             if days:
@@ -294,8 +295,6 @@ class EdcCoordinator(DataUpdateCoordinator):
 
     async def _async_update_data(self):
         """Regular daily poll: just look at the last few days (cheap)."""
-        if self.ean_not_found:
-            return self._build_result()
         today = date.today()
         date_from = today - timedelta(days=3)
         await self._async_fetch_range(date_from, today, collect_intervals=True)
@@ -323,15 +322,11 @@ class EdcCoordinator(DataUpdateCoordinator):
             "latest_date": latest_date,
             "latest": latest,
             "intervals": self.intervals,
-            "ean_not_found": self.ean_not_found,
         }
 
     # -------------------------------------------------------------- backfill
     async def async_backfill_if_needed(self) -> None:
         """Execute whatever `plan_backfill` decided is missing."""
-        if self.ean_not_found:
-            return
-
         plan = plan_backfill(
             set(self.history), self._attempted_from, self._history_start, date.today()
         )
@@ -365,21 +360,21 @@ class EdcCoordinator(DataUpdateCoordinator):
     async def async_run_with_retry(self) -> None:
         """Run a refresh; on transient failure, schedule 5min-then-hourly
         retries. On auth failure, stop retrying (a stale password won't fix
-        itself) and notify the integration so it can start a reauth flow. On
-        "EAN not found", there's nothing to retry either.
+        itself) and notify the integration so it can start a reauth flow.
         """
         if self._retry_unsub is not None:
             self._retry_unsub()
             self._retry_unsub = None
 
-        if self.ean_not_found:
-            return
-
         await self.async_refresh()
 
         if self.last_update_success:
             if self._consecutive_failures:
-                _LOGGER.info("EDC sdílení (%s): spojení obnoveno", self._ean)
+                _LOGGER.warning(
+                    "EDC sdílení (%s): spojení obnoveno po %d neúspěšných pokusech",
+                    self._ean,
+                    self._consecutive_failures,
+                )
             self._consecutive_failures = 0
             return
 
@@ -396,12 +391,18 @@ class EdcCoordinator(DataUpdateCoordinator):
 
         self._consecutive_failures += 1
         delay = RETRY_FIRST_DELAY if self._consecutive_failures == 1 else RETRY_REPEAT_DELAY
-        _LOGGER.warning(
-            "EDC sdílení (%s): aktualizace selhala (%s). Další pokus za %d s.",
-            self._ean,
-            self.last_exception,
-            delay,
+        # Retries are hourly and never give up, so warning every time would fill
+        # the log for as long as the portal is down. Warn on the first failure
+        # and then roughly once a day; the rest goes to debug.
+        message = (
+            "EDC sdílení (%s): aktualizace selhala (%s). Další pokus za %d s. "
+            "Neúspěšných pokusů v řadě: %d."
         )
+        args = (self._ean, self.last_exception, delay, self._consecutive_failures)
+        if self._consecutive_failures == 1 or self._consecutive_failures % 24 == 0:
+            _LOGGER.warning(message, *args)
+        else:
+            _LOGGER.debug(message, *args)
 
         async def _retry(_now):
             await self.async_run_with_retry()

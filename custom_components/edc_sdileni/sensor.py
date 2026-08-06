@@ -58,10 +58,7 @@ class _EdcBaseSensor(SensorEntity):
 
     @property
     def available(self) -> bool:
-        data = self._coordinator.data
-        if not data:
-            return False
-        return not data.get("ean_not_found", False)
+        return bool(self._coordinator.data)
 
     async def async_added_to_hass(self) -> None:
         self._coordinator.async_add_listener(self.async_write_ha_state)
