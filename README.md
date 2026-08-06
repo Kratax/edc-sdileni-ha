@@ -295,6 +295,13 @@ obchodníkovi. Sdílení je až rozdíl. Verze do 1.2 včetně brala `OUT` jako
 startu **přepočítá i už uloženou historii** (`shared = measured − shared`) —
 bez nového dotazu na portál, takže se měsíce zpětně doplněných dat neztratí.
 
+Portál občas vrátí hodnotu `v` v `values` jako **řetězec** místo čísla (typicky
+u `OUT`). Do verze 1.2.4 se tahle hodnota brala tak, jak přišla, takže odečet
+`exported - sold_to_trader` skončil `TypeError: unsupported operand type(s)
+for -: 'float' and 'str'` a celá aktualizace pro daný EAN spadla. 1.2.5 každou
+hodnotu z `values` bezpečně převádí na `float` (nečíselnou hodnotu bere jako
+`0.0`), ať už z portálu přijde jako číslo, nebo jako řetězec.
+
 ## Poznámka k testování
 
 Kód byl ověřen staticky (syntaxe, importy, logika chunkování a backfillu na
